@@ -81,3 +81,6 @@ lib/pointops/dist/
 lib/diff-gaussian-rasterization/
 lib/simple-knn/
 release_tools/
+
+# Local GSD planning artifacts
+.planning/

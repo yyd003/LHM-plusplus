@@ -26,13 +26,43 @@ import sys
 
 sys.path.append("./")
 
+import inspect as _inspect
+from collections import namedtuple as _namedtuple
+
 import numpy as np
+import builtins as _builtins
 import torch
 from pytorch3d.ops import SubdivideMeshes
 from pytorch3d.structures import Meshes
 
 from core.models.rendering.skinnings.constant import SMPLX_JOINTS
 from core.models.rendering.smplx import smplx
+
+if not hasattr(_inspect, "getargspec"):
+    _ArgSpec = getattr(_inspect, "ArgSpec", None)
+    if _ArgSpec is None:
+        _ArgSpec = _namedtuple("ArgSpec", "args varargs keywords defaults")
+        _inspect.ArgSpec = _ArgSpec
+
+    def _getargspec(func):
+        full = _inspect.getfullargspec(func)
+        return _ArgSpec(full.args, full.varargs, full.varkw, full.defaults)
+
+    _inspect.getargspec = _getargspec
+
+_NP_ALIAS_TYPES = {
+    "bool": _builtins.bool,
+    "int": _builtins.int,
+    "float": _builtins.float,
+    "complex": _builtins.complex,
+    "object": _builtins.object,
+    "unicode": _builtins.str,
+    "str": _builtins.str,
+}
+_np_dict = getattr(np, "__dict__", {})
+for _name, _typ in _NP_ALIAS_TYPES.items():
+    if _name not in _np_dict:
+        setattr(np, _name, _typ)
 
 
 class BaseSkinning:

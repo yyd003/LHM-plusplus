@@ -43,7 +43,10 @@ def load_model(ckpt_path, model_path, device=torch.device("cuda")):
     assert os.path.isfile(ckpt_path), f"{ckpt_path} not found"
 
     # Load weights
-    ckpt = torch.load(ckpt_path, map_location=device)
+    try:
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    except TypeError:
+        ckpt = torch.load(ckpt_path, map_location=device)
 
     # Get arguments saved in the checkpoint to rebuild the model
     kwargs = {}
@@ -100,8 +103,8 @@ class PoseEstimator:
         self.fov = 60
 
     def to(self, device):
-        self.device = device
-        self.mhmr_model.to(device)
+        self.device = torch.device(device)
+        self.mhmr_model.to(self.device)
         return self
 
     def get_camera_parameters(self):
@@ -185,7 +188,7 @@ class PoseEstimator:
         img_tensor, annotation = self._preprocess(img_np)
         K = self.get_camera_parameters()
 
-        with torch.cuda.amp.autocast(enabled=True):
+        with torch.amp.autocast(device_type=self.device.type, enabled=self.device.type == "cuda"):
             target_human = self.mhmr_model(
                 img_tensor,
                 is_training=False,

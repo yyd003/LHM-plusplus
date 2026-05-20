@@ -195,16 +195,22 @@ def main() -> None:
     dataset_pipeline = SrcImagePipeline(*processing_list)
     accelerator = Accelerator()
     cfg, _ = parse_app_configs(model_cards)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device != "cuda":
+        raise RuntimeError(
+            "CUDA is required for LHM++ inference in test_app_video.py. "
+            "torch.cuda.is_available() is False."
+        )
 
     print("[1/5] Loading model...")
     lhmpp = build_app_model(cfg)
-    lhmpp.to("cuda")
+    lhmpp.to(device)
     pose_estimator = None
     if cfg.get("use_smplx_shape_estimator", True):
         pose_estimator = PoseEstimator(
-            "./pretrained_models/human_model_files/", device="cpu"
+            "./pretrained_models/human_model_files/", device=device
         )
-        pose_estimator.device = "cuda"
+        pose_estimator.to(device)
 
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -235,15 +241,16 @@ def main() -> None:
     video_size = len(motion_seqs["motion_seqs"])
     print(f"  Motion: {motion_name}, frames: {video_size}")
 
-    print("[4/5] Running inference...")
-    device = "cuda"
+    print("[4/6] Running pose estimation...")
     dtype = torch.float32
     if pose_estimator is not None:
         with torch.no_grad():
-            with easy_memory_manager(pose_estimator, device="cuda"):
+            with easy_memory_manager(pose_estimator, device=device):
                 shape_pose = pose_estimator(imgs[0])
         if not shape_pose.is_full_body:
             raise ValueError(f"Input video invalid: {shape_pose.msg}")
+
+    print("[5/6] Running inference...")
     img_np = np.stack(imgs) / 255.0
     ref_imgs_tensor = torch.from_numpy(img_np).permute(0, 3, 1, 2).float().to(device)
     smplx_params = motion_seqs["smplx_params"]

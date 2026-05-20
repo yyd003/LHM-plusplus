@@ -202,7 +202,12 @@ class GSPlatRenderer(GS3DRenderer):
         if features is not None:
             colors_precomp = torch.cat([colors_precomp, features], dim=1)
             channel = colors_precomp.shape[1]
-            background_color = background_color[0].repeat(channel)
+            if background_color is not None:
+                background_color = background_color[0].repeat(channel)
+
+        backgrounds = None
+        if background_color is not None:
+            backgrounds = background_color.float()
 
         with torch.autocast(device_type=self.device.type, dtype=torch.float32):
             render_rgbd, render_alphas, meta = rasterization(
@@ -221,7 +226,7 @@ class GSPlatRenderer(GS3DRenderer):
                 eps2d=0.3,  # 3 pixel
                 render_mode="RGB",
                 # render_mode="RGB+D",
-                backgrounds=background_color.unsqueeze(0).float(),
+                backgrounds=backgrounds,
                 camera_model="pinhole",
             )
 
@@ -528,7 +533,12 @@ class GSPlatFeatRenderer(GSPlatRenderer):
         if features is not None:
             colors_precomp = torch.cat([colors_precomp, features], dim=1)
             channel = colors_precomp.shape[1]
-            background_color = background_color[0].repeat(channel)
+            if background_color is not None:
+                background_color = background_color[0].repeat(channel)
+
+        backgrounds = None
+        if background_color is not None:
+            backgrounds = background_color.float()
 
         with torch.autocast(device_type=self.device.type, dtype=torch.float32):
             render_rgbd, render_alphas, meta = rasterization(
@@ -547,7 +557,7 @@ class GSPlatFeatRenderer(GSPlatRenderer):
                 eps2d=0.3,  # 3 pixel
                 render_mode="RGB",
                 # render_mode="RGB+D",
-                backgrounds=background_color.unsqueeze(0).float(),
+                backgrounds=backgrounds,
                 camera_model="pinhole",
             )
 
@@ -843,11 +853,16 @@ class GSPlatBackFeatRenderer(GSPlatFeatRenderer):
         if features is not None:
             colors_precomp = torch.cat([colors_precomp, features], dim=1)
             channel = colors_precomp.shape[1]
-            bg_idx = (background_color[0] / 0.5).int().item()
-            background_embedding = self.background_embedding[bg_idx]
-            background_color = torch.cat(
-                [background_color, background_embedding], dim=0
-            )
+            if background_color is not None:
+                bg_idx = (background_color[0] / 0.5).int().item()
+                background_embedding = self.background_embedding[bg_idx]
+                background_color = torch.cat(
+                    [background_color, background_embedding], dim=0
+                )
+
+        backgrounds = None
+        if background_color is not None:
+            backgrounds = background_color.float()
 
         with torch.autocast(device_type=self.device.type, dtype=torch.float32):
             render_rgbd, render_alphas, meta = rasterization(
@@ -866,7 +881,7 @@ class GSPlatBackFeatRenderer(GSPlatFeatRenderer):
                 eps2d=0.3,  # 3 pixel
                 render_mode="RGB",
                 # render_mode="RGB+D",
-                backgrounds=background_color.unsqueeze(0).float(),
+                backgrounds=backgrounds,
                 camera_model="pinhole",
             )
 

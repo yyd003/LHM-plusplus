@@ -19,26 +19,6 @@ from core.utils.model_card import (
     ModelScope_Prior_MODEL_CARD,
 )
 
-# --- Ensure huggingface_hub==0.23.2 to avoid conflicts with modelscope (requires hf<1.0) ---
-_HF_HUB_TARGET_VERSION = "0.23.2"
-_hf_version_ok = False
-try:
-    import huggingface_hub as _hf_mod
-    _hf_version_ok = getattr(_hf_mod, "__version__", "") == _HF_HUB_TARGET_VERSION
-except ImportError:
-    pass
-if not _hf_version_ok:
-    print(f"huggingface_hub is not {_HF_HUB_TARGET_VERSION}. Installing...")
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", f"huggingface_hub=={_HF_HUB_TARGET_VERSION}"]
-        )
-        if "huggingface_hub" in sys.modules:
-            del sys.modules["huggingface_hub"]
-        print(f"huggingface_hub=={_HF_HUB_TARGET_VERSION} installed.")
-    except Exception as e:
-        print(f"Failed to install huggingface_hub=={_HF_HUB_TARGET_VERSION}: {e}")
-
 # --- Hugging Face Hub Import (auto-install if missing) ---
 package_name = "huggingface_hub"
 hf_snapshot = None

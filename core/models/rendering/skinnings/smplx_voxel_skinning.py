@@ -132,7 +132,10 @@ class SMPLXVoxelSkinning(nn.Module):
             torch.Tensor: Per-vertex normals of shape [N, 3], normalized to unit length.
         """
 
-        faces = torch.from_numpy(faces).long().to(verts.device)
+        if torch.is_tensor(faces):
+            faces = faces.long().to(verts.device)
+        else:
+            faces = torch.from_numpy(faces).long().to(verts.device)
         i0, i1, i2 = faces[:, 0], faces[:, 1], faces[:, 2]
         v0, v1, v2 = verts[i0], verts[i1], verts[i2]
 
@@ -936,15 +939,19 @@ class SMPLXVoxelSkinning(nn.Module):
     def _smplx_init(self):
         """Initialize upsampled SMPLX model with registered buffers."""
         smpl_x = self.base_skinning
-        dense_pts = self.dense_pts.cuda()
-        template_verts = self.smplx_layer.v_template
+        device = torch.device(avaliable_device())
+        dense_pts = self.dense_pts.to(device)
+        template_verts = self.smplx_layer.v_template.to(device)
         faces = self.smplx_layer.faces
+        if not torch.is_tensor(faces):
+            faces = torch.as_tensor(faces)
+        faces = faces.to(device)
 
         # Compute normals and nearest neighbors
         verts_normal = self.compute_verts_normal(template_verts, faces)
         nn_indices = knn_points(
-            dense_pts.unsqueeze(0).cuda(),
-            template_verts.unsqueeze(0).cuda(),
+            dense_pts.unsqueeze(0),
+            template_verts.unsqueeze(0),
             K=1,
             return_nn=True,
         ).idx.squeeze(0, -1)
@@ -1060,7 +1067,7 @@ class SMPLXVoxelSkinning(nn.Module):
         )
 
         coordinates = coordinates.view(-1, 3).float()
-        coordinates = coordinates.cuda()
+        coordinates = coordinates.to(device)
 
         if os.path.exists(f"./pretrained_models/voxel_grid/voxel_{voxel_size}.pth"):
             print(f"load voxel_grid voxel_{voxel_size}.pth")
@@ -1110,11 +1117,12 @@ class SMPLXVoxelSkinning(nn.Module):
     ):
         """Smooth KNN to handle skirt deformation."""
 
-        lbs_weights = lbs_weights.cuda()
+        device = voxel_v.device
+        lbs_weights = lbs_weights.to(device)
 
         dist = knn_points(
-            voxel_v.unsqueeze(0).cuda(),
-            template_v.unsqueeze(0).cuda(),
+            voxel_v.unsqueeze(0),
+            template_v.unsqueeze(0),
             K=1,
             return_nn=True,
         )
@@ -1128,8 +1136,8 @@ class SMPLXVoxelSkinning(nn.Module):
         # Smooth Skinning
 
         knn_dis = knn_points(
-            voxel_v.unsqueeze(0).cuda(),
-            voxel_v.unsqueeze(0).cuda(),
+            voxel_v.unsqueeze(0),
+            voxel_v.unsqueeze(0),
             K=smooth_k + 1,
             return_nn=True,
         )

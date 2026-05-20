@@ -289,6 +289,9 @@ def obtain_ref_imgs_from_videos(
         RuntimeError: If video cannot be read.
         Exception: If no frames are found in the video.
     """
+    u2net_home = os.path.abspath(os.path.join(".", "pretrained_models", "u2net"))
+    os.makedirs(u2net_home, exist_ok=True)
+    os.environ.setdefault("U2NET_HOME", u2net_home)
     from rembg import remove
 
     def human_centers_crop(
@@ -298,14 +301,17 @@ def obtain_ref_imgs_from_videos(
         rgbs = []
         for img in imgs:
             bgr_img = img[:, :, ::-1]
-            mask = remove(bgr_img)
-            img, mask, _, _, _ = src_center_crop_according_to_mask(
-                img,
-                mask[..., -1] / 255.0,
-                aspect_standard=5.0 / 3,
-                enlarge_ratio=[1.0, 1.0],
-                head_bbox=None,
-            )
+            try:
+                mask = remove(bgr_img)
+                img, mask, _, _, _ = src_center_crop_according_to_mask(
+                    img,
+                    mask[..., -1] / 255.0,
+                    aspect_standard=5.0 / 3,
+                    enlarge_ratio=[1.0, 1.0],
+                    head_bbox=None,
+                )
+            except Exception:
+                pass
             rgbs.append(img / 255.0)
         rgbs = dataset_pipeline(rgbs)
         rgbs = [(rgb * 255).astype(np.uint8) for rgb in rgbs]

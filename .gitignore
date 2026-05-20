@@ -84,3 +84,5 @@ release_tools/
 
 # Local GSD planning artifacts
 .planning/
+.agents/
+.codex/

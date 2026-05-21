@@ -85,13 +85,28 @@ flowchart TD
     J --> K["inference_results()"]
     R5 --> K
 
-    K --> L["Reconstruct avatar once<br/>model.infer_single_view()"]
-    L --> L1["canonical Gaussian avatar state<br/>gs_model_list, query_points,<br/>gs_hidden_features, image_latents,<br/>motion_emb, pos_emb"]
+    subgraph IV["Reconstruct avatar once: model.infer_single_view()"]
+        K --> L["infer_single_view()"]
+        L --> L2["forward_latent_points()"]
+        L2 --> L3["DINOv2 image encoder<br/>cls_feats + image_feats"]
+        L3 --> L4["point-image transformer<br/>query_points + image_feats + motion_feats"]
+        L4 --> L5["latent avatar features<br/>gs_hidden_features / image_latents<br/>motion_emb / pos_emb"]
+        L5 --> L6["renderer.forward_gs()<br/>query_points neutral_coords"]
+        L6 --> L7["Gaussian attributes<br/>offset_xyz, opacity, rotation,<br/>scaling, appearance/features"]
+    end
+
+    L7 --> L1["canonical Gaussian avatar state<br/>gs_model_list, query_points,<br/>gs_hidden_features, image_latents,<br/>motion_emb, pos_emb"]
 
     L1 --> N["Animate/render in batches"]
     N --> O["slice frame-varying SMPL-X<br/>root_pose, body_pose, hands, eyes,<br/>expr, trans, camera/intrinsics"]
-    O --> P["model.animation_infer()"]
-    P --> Q["renderer.forward_animate_gs()<br/>neural_renderer()<br/>RGB + mask"]
+    subgraph AI["Animate/render in batches: model.animation_infer()"]
+        O --> P["animation_infer()"]
+        P --> Q1["renderer.forward_animate_gs()"]
+        Q1 --> Q2["GSPlat feature rendering<br/>comp_rgb, comp_mask, comp_features"]
+        Q2 --> Q3["neural_renderer()<br/>DPT-style dense decoder"]
+        Q3 --> Q["RGB + mask"]
+    end
+
     Q --> S["restore crop/layout<br/>offset_list + output_rgb"]
     S --> T["concatenate RGB frames"]
     T --> U{"center crop?"}
@@ -179,11 +194,111 @@ LHM++ demo path has a subtle but important distinction:
 
 最后，所有 batch 的 RGB frames 被 concat。如果用户启用 center crop，则根据 rendered masks 裁剪主体区域；否则保留完整 frame。`app.py` 使用 `imageio.v3.imwrite()` 写出 `output.mp4`，Gradio 再显示这个视频。
 
+## Phase 2: Network Design
+
+本节展开上面 flowchart 中 `infer_single_view()` 和 `animation_infer()` 两块内部发生的 network design。阅读时可以把它看成一个两阶段系统：第一阶段从 reference images 生成 reusable Gaussian/avatar state；第二阶段把这个 state 放到每一帧 motion/camera 条件下，用 GSPlat feature rendering + DPT-style neural renderer 输出 RGB + mask。
+
+### App-to-render network boundary
+
+`scripts/inference/app_inference.py::inference_results()` 是 network path 的总入口。它先把 `ref_img_tensors` 增加 batch 维度后传入 `model.infer_single_view()`，得到 `gs_model_list`、`query_points`、`transform_mat_neutral_pose`、`gs_hidden_features`、`image_latents`、`motion_emb`，以及可选的 `pos_emb`。随后它把 `transform_mat_neutral_pose` 写回 batched `smplx_params`，再按 frame batch 切分 `root_pose`、`body_pose`、hands、eyes、`expr`、`trans`、camera intrinsics 等 frame-varying keys，调用 `model.animation_infer()` 输出 `batch_rgb` 和 `batch_mask`。
+
+`PoseEstimator` 在 Phase 2 中只作为 context 出现：`engine/pose_estimation/pose_estimator.py::PoseEstimator.__call__()` 从 reference image 估计 reference shape `betas`，让 reconstruction 使用 reference person 的 body shape。Multi-HMR 结构、SMPL-X 参数来源拆分、`transform_mat_neutral_pose` 如何驱动 posed avatar，放到 Phase 3 解释。
+
+### DINOv2 image encoder and image feature tokens
+
+默认 app config `configs/train/LHMPP-any-view.yaml` 使用 `encoder_type: dinov2`、`encoder_model_name: dinov2_vitl14_reg`、`encoder_feat_dim: 1024`。`core/models/modeling_humana4o_lrm.py::_encoder_fn()` 根据 `encoder_type` 选择 `core/models/encoders/dinov2_wrapper.py::Dinov2Wrapper`。
+
+`Dinov2Wrapper.forward()` 把输入 image resize 到 `downsample_ratio = 14` 的倍数，然后调用 DINOv2 backbone，最后把 `outs["x_norm_clstoken"]` 和 `outs["x_norm_patchtokens"]` concat 成 token sequence。直观地说：
+
+- `cls token` 更像 global appearance summary，可被后续 `forward_motionembed()` 汇聚成 `motion_feats` / `motion_emb`。
+- `patch tokens` 保留 local appearance / texture / clothing cues，后续成为 point-image transformer 的 `image_feats`。
+
+这里的 DINOv2 背景只需要理解到这个层级：它不是直接输出 final RGB，而是把 reference appearance 转成 dense visual tokens，供后续 query-point latent features 使用。
+
+### forward_latent_points() and point-image transformer
+
+`core/models/modeling_humana4o_lrm.py::forward_latent_points()` 是 reference image tokens 进入 avatar latent space 的核心桥梁。函数 docstring 标注 input image 是 `[B, S, C_img, H_img, W_img]`，其中 `S` 是 reference views。代码先用 `einops.rearrange(image, "B S C H W -> (B S) C H W")` 合并 batch/view，再调用 `forward_encode_image()`。
+
+encoder 输出被拆成：
+
+- `cls_feats = image_feats[:, :1]`
+- `image_feats = image_feats[:, 1:]`
+
+随后 `motion_feats = self.forward_motionembed(cls_feats.mean(dim=1, keepdim=True))`，patch tokens 被 reshape 成 `B S P C`。这些 `image_feats`、`motion_feats`、以及 `query_points` 会进入 `forward_transformer()`。默认 config 中 `transformer_type: mm`，`transformer_decoder.type: patch_efficient_pvt_mm_encoder_decoder_dense`，这表示 LHM++ 用 multi-modality point-image transformer 把 image tokens 和 query point representation 融合。
+
+`forward_transformer()` 根据 `latent_query_points_type` 构造 query-point embedding。默认 `configs/train/LHMPP-any-view.yaml` 设置 `latent_query_points_type: e2e_points`，所以 query point feature 由 renderer 提供的 point representation 进入 transformer，而不是只用固定 learnable embedding。最终 `forward_latent_points()` 返回 `query_feats`、`img_feats`、`motion_embs`、`pos_embs`。在 `infer_single_view()` 里，这些分别对应后续的 `latent_points` / `gs_hidden_features`、`image_latents`、`motion_emb`、`pos_emb`。
+
+从表示角度看，point-image transformer 做的是 cross-modal feature transfer：reference image tokens 提供 appearance evidence，query points 提供 avatar 的 3D anchor / sampling positions，motion/global token 提供 coarse condition。输出的 `query_feats` 就是每个 query point 上的 latent avatar feature。
+
+### renderer.forward_gs() and Gaussian attributes
+
+`core/models/modeling_humana4o_lrm.py::infer_single_view()` 在拿到 `latent_points` 后调用 `self.renderer.forward_gs(gs_hidden_features=latent_points, query_points=query_points, smplx_data=smplx_params, additional_features={"image_feats": image_feats, "image": image[:, 0]})`。这里 `latent_points` 就是 Gaussian hidden features，也就是后续 `gs_hidden_features`。
+
+`core/models/rendering/base_gs_render.py::forward_gs()` 的注解把 `gs_hidden_features` 写成 `Float[Tensor, "B Np Cp"]`：`B` 是 batch size，`Np` 是 query points / Gaussian anchors 数量，`Cp` 是 feature channels。它使用 `query_points["neutral_coords"]` 和 SMPL-X context 调用 `query_latent_feat(...)`，把 latent features 对齐到 canonical / neutral query positions，再逐 batch 调用 `forward_gs_attr()`。
+
+`core/models/rendering/gs_renderer.py::forward_gs_attr()` 注释明确 `x: [N, C]`、`query_points: [N, 3]`。它把 per-point latent feature 和 query position 送入 `self.gs_net(...)`，输出 `GaussianAppOutput`。在文档层面可以把 Gaussian attributes 理解成每个 Gaussian anchor 的可渲染参数：`offset_xyz`、opacity、rotation、scaling，以及 RGB / feature appearance。`offset_xyz` 把 neutral query point 微调成更适合 avatar 表面的 Gaussian center；rotation/scaling/opacity/appearance 决定这个 Gaussian 如何被 rasterized。
+
+注意这里仍然是 Phase 2 的 inference-network 视角：`query_points["neutral_coords"]` 是 canonical anchors，详细的 SMPL-X skinning / `_transform_points()` / `animate_gs_model()` 如何把它们变成每帧 posed points，在 Phase 3 深入展开。
+
+### GSPlat feature renderer and DPT-style neural renderer
+
+`core/models/modeling_humana4o_lrm.py::animation_infer()` 对每个 render view/frame 调用 `self.renderer.forward_animate_gs(...)`。在默认 config 中 `gs_rendering: featbacksplat`、`render_features: True`、`neural_renderer.type: patch_4dptonly`、`neural_renderer_input: "feats"`，所以渲染路径不是只输出 raw Gaussian RGB，而是先渲染 learned feature maps，再用 neural renderer 变成 final RGB/mask。
+
+`core/models/rendering/gsplat_renderer.py::GSPlatFeatRenderer.forward_animate_gs()` 先调用 `animate_gs_model()`，把 canonical Gaussian attributes 和 `query_points` 放到当前 frame/view 的 posed space；然后 `_render_views()` 调用 `forward_single_view()`。`forward_single_view()` 使用 `gsplat.rendering.rasterization(...)`，返回 `comp_rgb`、`comp_mask`，并在传入 `features=gs_hidden_features` 时返回 `comp_features`。
+
+之后 `animation_infer()` 根据 `neural_renderer_input` 选择输入。如果是默认 `"feats"`，它调用：
+
+```text
+neural_renderer(image_latents, render_results["comp_features"], motion_emb, render_h, render_w, pos_emb_list=pos_emb)
+```
+
+`core/models/modeling_humana4o_lrm.py::_build_neural_renderer()` 会把 `patch_4dptonly` 映射到 `core/models/transformer_block/dpt_decoder.py::PatchDPT4DecoderOnly`。这些 DPT-style decoder 类用 patch/token processing 和 `DPTHead` 做 dense prediction：输入是 rendered feature image + reference image latents + motion embedding，输出是 final `predict_rgbs` 和 `predict_masks`。所以 Phase 2 可以把 final rendering 理解成两步：GSPlat 先把 3D Gaussian feature splat 到 2D feature map，DPT-style neural renderer 再把 feature map decode 成可看的 RGB + mask。
+
+### Tensor / representation table
+
+| Representation | Source anchor | Role | Shape / notes |
+|----------------|---------------|------|---------------|
+| `ref_img_tensors` | `scripts/inference/app_inference.py::inference_results()` | Reference appearance input sent to `infer_single_view()` | Commented as `(N, C, H, W)` before adding batch dimension; effective model input becomes `[B, S, C, H, W]` |
+| `image_feats` | `core/models/modeling_humana4o_lrm.py::forward_latent_points()` | DINOv2 patch image tokens used by point-image transformer | Rearranged to `B S P C`; `P` is patch/token count and is config-dependent |
+| `image_latents` | `infer_single_view()` return value from `forward_latent_points()` | Image latent tokens passed into `neural_renderer()` during animation | Same conceptual stream as returned `img_feats`; exact layout depends on transformer / DPT config |
+| `motion_emb` | `forward_latent_points()` / `inference_results()` | Global/motion-like conditioning derived from class tokens and reused by neural renderer | Built from `cls_feats`; channel dimension is config-dependent |
+| `pos_emb` | `forward_latent_points()` / `animation_infer()` | Optional positional embedding for DPT-style decoder variants | May be `None`; only passed when returned by model |
+| `query_points` | `renderer.get_query_points()` and `forward_transformer()` | 3D/canonical point representation used as avatar anchors | Dict or tensor depending on `latent_query_points_type`; default app config uses `e2e_points` |
+| `query_points["neutral_coords"]` | `core/models/rendering/base_gs_render.py::forward_gs()` | Canonical / neutral coordinates for Gaussian anchors | Annotated by renderer paths as `[B, N, 3]` or per-batch `[N, 3]` |
+| `gs_hidden_features` | `infer_single_view()` return value / `forward_gs()` input | Per-query latent features used to predict Gaussian attributes and later render feature maps | Annotated in renderer as `[B, Np, Cp]`; `Np` and `Cp` are model/config-dependent |
+| `Gaussian attributes` | `core/models/rendering/gs_renderer.py::forward_gs_attr()` | Renderable Gaussian parameters | Includes `offset_xyz`, opacity, rotation, scaling, and appearance/features via `GaussianAppOutput` |
+| `comp_features` | `core/models/rendering/gsplat_renderer.py::forward_single_view()` | GSPlat rasterized feature image consumed by neural renderer | Present when `features` is passed; spatial size follows render height/width |
+| `comp_rgb` | `forward_single_view()` | Intermediate GSPlat RGB output | `[H, W, 3]` in renderer comments; may be auxiliary when neural renderer uses feature input |
+| `comp_mask` | `forward_single_view()` | Alpha / foreground mask from GSPlat rasterization | `[H, W]` or batched/view-combined form after `_combine_outputs()` |
+| `batch_rgb` | `animation_infer()` return consumed by `inference_results()` | Final neural-rendered RGB frames for a batch | Converted to uint8 numpy and concatenated over time |
+| `batch_mask` | `animation_infer()` return consumed by `inference_results()` | Final mask frames for optional center crop and output layout | Used to compute crop bounds when `visualized_center=True` |
+
+### Caveats
+
+- 本节解释 inference-network path，不覆盖 training/loss。`configs/train/` 和 model files 里有训练配置、loss、gradient checkpointing 等信息，但 Phase 2 只解释 demo/inference 如何产生 output frames。
+- `PoseEstimator` 只作为 reference shape `betas` context 出现；PoseEstimator 自身的 Multi-HMR internals、SMPL-X motion assets 的参数来源、以及 `animate_gs_model()` / `_transform_points()` 的 driving mechanics 属于 Phase 3。
+- Tensor shapes 里凡是依赖 config、patch size、render size、reference view 数、query point 类型、或 selected model variant 的部分，都应读作 config-dependent，而不是 LHM++ 所有模型的固定常数。
+- DINOv2、GSPlat、DPT-style decoder 都有各自完整的 upstream theory；本文只解释它们在 LHM++ pipeline 中承担的角色。
+
+### Phase 2 source reading order
+
+建议在 Phase 1 的 source reading order 之后继续按这个顺序读：
+
+1. `scripts/inference/app_inference.py::inference_results()`：确认 `infer_single_view()` 返回哪些 reusable state，以及 `animation_infer()` 如何按 batch 消费它们。
+2. `core/models/modeling_humana4o_lrm.py::infer_single_view()`：看 reconstruction once 如何调用 `forward_latent_points()` 和 `renderer.forward_gs()`。
+3. `core/models/modeling_humana4o_lrm.py::forward_latent_points()`：看 DINOv2 tokens、`cls_feats`、`image_feats`、`motion_feats`、`forward_transformer()` 如何连接。
+4. `core/models/encoders/dinov2_wrapper.py::Dinov2Wrapper.forward()` + `configs/train/LHMPP-any-view.yaml`：确认 default DINOv2 encoder config 和 token 输出。
+5. `core/models/rendering/base_gs_render.py::forward_gs()`：看 `gs_hidden_features`、`query_points["neutral_coords"]` 如何进入 Gaussian attribute prediction。
+6. `core/models/rendering/gs_renderer.py::forward_gs_attr()`：看 per-point features 如何变成 `GaussianAppOutput`。
+7. `core/models/rendering/gsplat_renderer.py::GSPlatFeatRenderer.forward_animate_gs()`：看 Gaussian attributes 如何被 GSPlat rasterization 成 `comp_rgb`、`comp_mask`、`comp_features`。
+8. `core/models/modeling_humana4o_lrm.py::animation_infer()`：看 `comp_features`、`image_latents`、`motion_emb` 如何进入 `neural_renderer()`。
+9. `core/models/transformer_block/dpt_decoder.py`：看 `PatchDPT4DecoderOnly` / `DPTHead` 风格的 dense prediction 如何输出 RGB 和 mask。
+
 ## What Phase 1 Intentionally Defers
 
 本文档只建立 skeleton。以下内容留给后续阶段：
 
-- Phase 2: `DINOv2 image encoder`、`forward_latent_points()`、point-image transformer、`renderer.forward_gs()`、GSPlat feature renderer、DPT-style neural renderer 的 network design。
+- Phase 2: `DINOv2 image encoder`、`forward_latent_points()`、point-image transformer、`renderer.forward_gs()`、GSPlat feature renderer、DPT-style neural renderer 的 network design 已在本文上方展开。
 - Phase 3: `PoseEstimator` 输出和 motion assets 的 SMPL-X 参数区别、frame-varying keys、neutral query points、`transform_mat_neutral_pose`、`animate_gs_model()`、`_transform_points()`、skinning/deformation 如何驱动 Gaussian avatar。
 
 ## Source Reading Order

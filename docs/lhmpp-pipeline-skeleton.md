@@ -294,12 +294,108 @@ neural_renderer(image_latents, render_results["comp_features"], motion_emb, rend
 8. `core/models/modeling_humana4o_lrm.py::animation_infer()`：看 `comp_features`、`image_latents`、`motion_emb` 如何进入 `neural_renderer()`。
 9. `core/models/transformer_block/dpt_decoder.py`：看 `PatchDPT4DecoderOnly` / `DPTHead` 风格的 dense prediction 如何输出 RGB 和 mask。
 
+## Phase 3: SMPL-X Driving
+
+本节解释 Phase 2 中刻意保留的 SMPL-X driving / deformation 细节：reference person 的 shape 如何进入系统、selected driving motion 的 per-frame 参数如何被 batch 切片，以及 canonical / neutral Gaussian avatar 如何通过 SMPL-X skinning 变成每一帧 posed Gaussian models。核心 source path 是 `scripts/inference/app_inference.py::inference_results()` -> `core/models/modeling_humana4o_lrm.py::infer_single_view()` -> `core/models/modeling_humana4o_lrm.py::animation_infer()` -> `core/models/rendering/base_gs_render.py::forward_animate_gs()`。
+
+### Shape betas vs driving motion parameters
+
+Phase 3 最容易混淆的一点是：`betas` 和 frame-wise SMPL-X motion 并不来自同一个地方。
+
+- **Reference shape `betas`**：demo / test path 会对 reference appearance 的第一张图 `imgs[0]` 调用 `engine/pose_estimation/pose_estimator.py::PoseEstimator.__call__()`。该函数最后返回 `SMPLXOutput(beta=target_human["shape"][0].cpu().numpy(), is_full_body=True)`，所以它估计的是 reference person 的 body shape。换句话说，`PoseEstimator.__call__()` 负责回答“这个 avatar 的人体形状像谁”。
+- **Driving motion parameters**：用户右侧选中的 driving motion 会被 `core/utils/app_utils.py::prepare_input_and_output()` 映射到 `motion_video/<name>/smplx_params`，再由 `core/utils/app_utils.py::get_motion_information()` 调用 `scripts/inference/utils.py::obtain_motion_sequence()` 读取 sorted per-frame JSON。`obtain_motion_sequence()` 还会在存在 `flame_params` 时覆盖 / 补充 `expr`、`jaw_pose`、`leye_pose`、`reye_pose`。随后 `core/runners/infer/utils.py::prepare_motion_seqs_eval()` 把 motion SMPL-X params、camera、mask、bbox 和 render metadata 打包成 `motion_seqs`。
+
+因此，Phase 1 中提到的 `smplx_params["betas"] = shape_pose.beta` 是一个 identity / shape graft：系统把 reference person 的 shape 接到 selected motion asset 的 frame-wise pose / expression / camera stream 上。这里的 shape 参数是相对稳定的 per-identity metadata；`root_pose`、`body_pose`、hands、eyes、`expr`、`trans` 等才是随 motion frame 变化的 driving data。
+
+还有一个 config-dependent caveat：`scripts/inference/app_inference.py::inference_results()` 会检查 `model.use_pred_shape_for_render`。如果 `infer_single_view()` 返回 `pred_shape` 且该开关启用，`core/models/modeling_humana4o_lrm.py::smplx_params_with_pred_shape_betas()` 会用 model-predicted shape 覆盖 `betas` 的前若干维用于 rendering；否则 animation 使用传入的 reference-shape `smplx_params_dev["betas"]`。
+
+### frame_varying_keys contract
+
+`scripts/inference/app_inference.py::inference_results()` 先 reconstruct avatar once，然后在 animation loop 中按 `batch_size` 切 motion frames。它先创建静态的 `batch_smplx_params`：
+
+```text
+betas
+transform_mat_neutral_pose
+```
+
+随后定义 `frame_varying_keys`，并在每个 batch 里用 `motion_seq["smplx_params"][key][:, batch_idx:batch_idx + batch_size]` 切出当前 frame window。 practical shape 可以理解成 `[B, T, ...]`：`B` 通常是 app path 里的 batch/person dimension，`T` 是当前 batch 的 frame/view window；后续 `get_single_view_smpl_data()` 还会按 `vidx` 再切成 single-view / single-frame form。具体维度会随 motion asset、config、renderer helper reshape 而变化，所以这里使用 practical / config-dependent notes，而不是给出全局固定常数。
+
+| Key | Contract | Source / provenance | Practical representation and batching |
+|-----|----------|---------------------|----------------------------------------|
+| `root_pose` | SMPL-X driving | Per-frame motion JSON via `obtain_motion_sequence()` / `prepare_motion_seqs_eval()` | Global/root orientation. Batched as `motion_seq["smplx_params"][key][:, batch_idx:batch_idx + batch_size]`; later used by SMPL-X forward kinematics. |
+| `body_pose` | SMPL-X driving | Per-frame motion JSON | Body joint rotations. The renderer comments commonly show body pose as joint axis-angle groups; exact shape is config-dependent after batching and view slicing. |
+| `jaw_pose` | SMPL-X driving / face | SMPL-X JSON, optionally replaced by FLAME `posecode[3:]` | Jaw rotation for face/mouth motion; sliced per frame with the same batch window. |
+| `leye_pose` | SMPL-X driving / face | SMPL-X JSON, optionally replaced by FLAME `eyecode[:3]` | Left eye pose; carried with frame motion and consumed when composing the full SMPL-X pose. |
+| `reye_pose` | SMPL-X driving / face | SMPL-X JSON, optionally replaced by FLAME `eyecode[3:]` | Right eye pose; same batching behavior as `leye_pose`. |
+| `lhand_pose` | SMPL-X driving / hands | Per-frame motion JSON | Left-hand pose parameters; later concatenated into the full SMPL-X pose in skinning code. |
+| `rhand_pose` | SMPL-X driving / hands | Per-frame motion JSON | Right-hand pose parameters; same frame-window slicing as `lhand_pose`. |
+| `trans` | SMPL-X driving / global placement | Per-frame motion JSON | Global translation. In lower-level skinning it is applied when producing final posed coordinates, so it affects where the posed avatar lands in space. |
+| `expr` | SMPL-X driving / expression | SMPL-X JSON or FLAME `expcode` override | Facial expression coefficients. Lower-level skinning applies expression offsets before final posed vertices; dimensionality can be config-dependent, often 100 coefficients in this repo's SMPL-X paths. |
+| `focal` | render-camera metadata | Motion packaging from camera/intrinsic data | Focal length metadata carried inside `smplx_params` so render intrinsics can stay aligned with the frame window. It is not a body pose parameter. |
+| `princpt` | render-camera metadata | Motion packaging from camera/intrinsic data | Principal point metadata. It supports render shape / camera geometry and should be read as camera metadata, not SMPL-X articulation. |
+| `img_size_wh` | render-camera / image metadata | Motion packaging from image/crop/render metadata | Image width/height metadata for render/crop alignment. It travels with `frame_varying_keys` because it varies with the prepared motion frame contract, not because it is part of SMPL-X pose. |
+
+这个表的关键 takeaway 是：`frame_varying_keys` 是 implementation-level batching contract，不完全等于 semantic-level SMPL-X pose contract。`root_pose` 到 `expr` 驱动 body / face / hand / translation；`focal`、`princpt`、`img_size_wh` 是 render-camera / image metadata，只是为了让 animation batch 的 camera geometry 和 frame data 同步。
+
+### Neutral query points and transform_mat_neutral_pose
+
+`core/models/modeling_humana4o_lrm.py::infer_single_view()` 是 canonical avatar setup 的关键入口。当 `latent_query_points_type` 以 `e2e_smplx` 或 `e2e_points` 开头时，它会调用 `self.renderer.get_query_points(query_pts_path, smplx_params, device=image.device)`。在 `core/models/rendering/base_gs_render.py::get_query_points()` 中，renderer 调用 SMPL-X skinning model 生成 `query_points`，然后把 `query_points["transform_mat_to_null_pose"]` 写入 `smplx_data["transform_mat_neutral_pose"]`。
+
+在文档层面可以这样理解：
+
+- `query_points["neutral_coords"]` 是 canonical / neutral space 中的 Gaussian anchor positions。Phase 2 已经解释过它们会参与 latent features 和 Gaussian attributes prediction。
+- `query_points["transform_mat_to_null_pose"]` 是从 neutral pose 到 zero/null pose 的 transform metadata。
+- `transform_mat_neutral_pose` 是同一个 transform 被保存到 `smplx_params` / `smplx_data` 里的名字。它在 `infer_single_view()` 阶段生成，在 `inference_results()` 中被放进 `batch_smplx_params`，然后在每个 animation batch 中复用。
+
+所以 `transform_mat_neutral_pose` 不是一个 frame-by-frame 新估计的 motion 参数。它更像 canonical avatar reconstruction 阶段留下的 deformation map：后续每一帧都需要它来把 neutral query points 接到 target SMPL-X pose 的变换链上。
+
+### From canonical Gaussian avatar to posed Gaussian models
+
+`scripts/inference/app_inference.py::inference_results()` 在调用 `infer_single_view()` 后，会得到 reusable avatar state：`gs_model_list`、`query_points`、`transform_mat_neutral_pose`、`gs_hidden_features`、`image_latents`、`motion_emb` 和可选 `pos_emb`。随后它把 `betas` 和 `transform_mat_neutral_pose` 放进 `batch_smplx_params`，再把当前 frame window 的 `frame_varying_keys` update 进去。
+
+进入 rendering 时，source path 是：
+
+1. `core/models/modeling_humana4o_lrm.py::animation_infer()` 遍历 target views / frames。
+2. 每个 view 调用 `self.renderer.get_single_view_smpl_data(smplx_params, view_idx)`，其中 `betas` 和 `transform_mat_neutral_pose` 会保持不按 view 切，其他 pose / expression / camera keys 会切成 `[:, vidx:vidx + 1]`。
+3. `animation_infer()` 调用 `core/models/rendering/base_gs_render.py::forward_animate_gs()`。
+4. `forward_animate_gs()` 从 `query_points["neutral_coords"]` 取 canonical coordinates，并对每个 batch item 调用 `animate_gs_model()`。
+5. `animate_gs_model()` 先整理 SMPL-X data，再调用 `_transform_points()`，随后用 `_compute_rotations()` 更新 Gaussian rotations，最后创建 posed `GaussianModel` list。
+6. `_transform_points()` 把 `query_points + gs_attr.offset_xyz` 作为 neutral-space Gaussian centers，展开 `transform_mat_neutral_pose`，并构造包含 `neutral_coords`、`transform_mat_to_null_pose`、`mesh_meta` 的 `points` dict，然后委托给 `transform_to_posed_verts_from_neutral_pose()`。
+
+这就是 conceptual SMPL-X-to-posed-Gaussian bridge：network 预测的是 canonical Gaussian avatar attributes；SMPL-X motion 并不是重新生成 avatar，而是把这些 neutral / canonical Gaussians 通过 skinning/deformation 变换到每帧 posed space。
+
+`core/models/rendering/skinnings/smplx_voxel_skinning.py` 是下层实现细节。它的注释明确 `transform_mat_neutral_pose` 用于 neutral pose -> zero pose；后续 `get_transform_mat_joint()` 会把 zero pose -> image/target pose 的 joint transform 算出来，再组合成 neutral -> posed frame 的 transform。`transform_to_posed_verts_from_neutral_pose()` 还会处理 expression offsets、shape blendshapes、voxel skinning weights、global `trans` 等细节。Phase 3 只需要把这些总结成“lower-level skinning implementation”，不需要展开完整 SMPL-X / LBS 数学推导。
+
+### Phase 3 source reading order
+
+如果目标是专门理解 SMPL-X driving，建议按这个 Source reading order 读：
+
+1. `scripts/inference/app_inference.py::inference_results()`：看 `batch_smplx_params`、`frame_varying_keys`、`transform_mat_neutral_pose` 如何进入 animation batches。
+2. `engine/pose_estimation/pose_estimator.py::PoseEstimator.__call__()`：看 reference shape `beta` / `betas` 的来源。
+3. `core/utils/app_utils.py::get_motion_information()`：看 selected driving motion 如何定位到 `smplx_params`、mask、bbox。
+4. `scripts/inference/utils.py::obtain_motion_sequence()`：看 per-frame SMPL-X JSON 和 optional FLAME expression / jaw / eye overrides 如何加载。
+5. `core/runners/infer/utils.py::prepare_motion_seqs_eval()`：看 motion sequence 如何打包成 batched SMPL-X / camera / mask tensors。
+6. `core/models/modeling_humana4o_lrm.py::infer_single_view()`：看 canonical avatar setup 如何拿到 `query_points` 和 `transform_mat_neutral_pose`。
+7. `core/models/rendering/base_gs_render.py::get_query_points()`：看 `query_points["transform_mat_to_null_pose"]` 如何被保存为 `transform_mat_neutral_pose`。
+8. `core/models/modeling_humana4o_lrm.py::animation_infer()`：看 frame-wise SMPL-X slices 如何传给 renderer。
+9. `core/models/rendering/base_gs_render.py::forward_animate_gs()`：看 renderer 如何把 query points 和 SMPL-X data 送进 animation path。
+10. `core/models/rendering/base_gs_render.py::animate_gs_model()`：看 canonical Gaussian attributes 如何被转换成 posed Gaussian models。
+11. `core/models/rendering/base_gs_render.py::_transform_points()`：看 neutral coordinates、`offset_xyz`、`transform_mat_neutral_pose` 如何组成 lower-level transform input。
+12. `core/models/rendering/skinnings/smplx_voxel_skinning.py::transform_to_posed_verts_from_neutral_pose()`：只读 conceptual blocks，确认 expression offset、shape blendshape、joint transform、voxel skinning weights、global translation 的实现位置。
+
+### Phase 3 caveats
+
+- 本节使用 practical shape notes。`B`、`T`、joint count、expression dimension、view slicing 可能因 motion data、config、renderer helper 而变化；遇到具体样本时应回到 source / tensor dump 验证。
+- `focal`、`princpt`、`img_size_wh` 虽然出现在 `frame_varying_keys` 中，但它们是 render-camera / image metadata，不是 SMPL-X body articulation。
+- `smplx_voxel_skinning.py` 里包含完整的 lower-level deformation details，例如 expression offsets、shape blendshapes、LBS-style transforms 和 voxel skinning weights。本文只解释它们在 pipeline 中的位置，不做完整数学 derivation。
+- Phase 3 仍然是 documentation-only work：不修改 `app.py`、`core/`、`engine/`、`scripts/` 下的 runtime/model/source files。
+
 ## What Phase 1 Intentionally Defers
 
 本文档只建立 skeleton。以下内容留给后续阶段：
 
 - Phase 2: `DINOv2 image encoder`、`forward_latent_points()`、point-image transformer、`renderer.forward_gs()`、GSPlat feature renderer、DPT-style neural renderer 的 network design 已在本文上方展开。
-- Phase 3: `PoseEstimator` 输出和 motion assets 的 SMPL-X 参数区别、frame-varying keys、neutral query points、`transform_mat_neutral_pose`、`animate_gs_model()`、`_transform_points()`、skinning/deformation 如何驱动 Gaussian avatar。
+- Phase 3: `PoseEstimator` 输出和 motion assets 的 SMPL-X 参数区别、frame-varying keys、neutral query points、`transform_mat_neutral_pose`、`animate_gs_model()`、`_transform_points()`、skinning/deformation 如何驱动 Gaussian avatar，已在本文上方展开。
 
 ## Source Reading Order
 
@@ -315,5 +411,7 @@ neural_renderer(image_latents, render_results["comp_features"], motion_emb, rend
 8. `scripts/inference/app_inference.py::inference_results()`：看 reconstruction once + animation batches 的核心控制流。
 9. `core/models/modeling_humana4o_lrm.py::infer_single_view()`：看 canonical avatar state 如何生成。
 10. `core/models/modeling_humana4o_lrm.py::animation_infer()`：看 frame-wise animation/rendering 如何调用。
+11. `core/models/rendering/base_gs_render.py::forward_animate_gs()` / `animate_gs_model()` / `_transform_points()`：看 neutral Gaussian avatar 如何进入 posed Gaussian path。
+12. `core/models/rendering/skinnings/smplx_voxel_skinning.py::transform_to_posed_verts_from_neutral_pose()`：只读 conceptual blocks，确认 lower-level skinning / deformation 的实现位置。
 
 按这个路径读，能先把 system skeleton 建起来，再进入 Phase 2 / Phase 3 的网络和 SMPL-X driving 细节。

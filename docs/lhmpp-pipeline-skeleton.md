@@ -1,10 +1,25 @@
-# LHM++ Pipeline Skeleton
+# LHM++ Pipeline Research Notes
 
-本文档解释 LHM++ demo / inference 的高层执行链路：从用户输入 reference images / uploaded video 和 selected driving motion，到最终写出 MP4。重点是 abstraction and clarity：先建立完整 pipeline skeleton，后续 Phase 2 再展开 network design，Phase 3 再展开 SMPL-X driving / deformation 细节。
+本文档是 LHM++ demo / inference path 的研究型阅读笔记：从用户输入 reference images / uploaded video 和 selected driving motion，到 reference shape `betas`、canonical Gaussian avatar reconstruction、SMPL-X-driven animation，最后写出 MP4。重点是 abstraction and clarity：先建立完整 system view，再进入 network design、SMPL-X driving / deformation，以及可验证的 source reading order。
+
+## Executive Summary
+
+- **Reference appearance** 来自 gallery images 或 uploaded video sampled frames，决定 avatar 的 identity、clothing、texture 和 visual appearance。
+- **Driving motion** 来自 selected `motion_video/<name>/` asset，提供 per-frame SMPL-X pose / expression / translation / camera / mask metadata。
+- `engine/pose_estimation/pose_estimator.py::PoseEstimator.__call__()` 从第一张 reference image 估计 reference shape `betas`，再 graft 到 selected motion sequence 上。
+- `scripts/inference/app_inference.py::inference_results()` 先调用 `core/models/modeling_humana4o_lrm.py::infer_single_view()` reconstruct avatar once，得到 reusable canonical Gaussian avatar state。
+- `inference_results()` 再按 motion batch 调用 `core/models/modeling_humana4o_lrm.py::animation_infer()`，把 frame-varying SMPL-X / camera data 送入 renderer。
+- Network path 可以理解为 DINOv2 image tokens + point-image transformer -> Gaussian attributes -> GSPlat feature rendering -> DPT-style neural renderer。
+- SMPL-X driving path 可以理解为 reference shape + motion asset params -> `batch_smplx_params` -> `forward_animate_gs()` / `_transform_points()` -> posed Gaussian models。
+- 每个主要 section 都保留 source file / function anchors，方便 researcher 回到 codebase 验证具体 handoff。
+
+## How to read this document
+
+建议先读 `High-Level Flowchart` 建立全局 flowchart，再读 `Stage-by-Stage Data Flow` 和 `Module Interaction Map` 理清 input-to-output data flow。之后按兴趣进入 `Phase 2: Network Design` 理解 DINOv2 / transformer / Gaussian / neural renderer，或进入 `Phase 3: SMPL-X Driving` 理解 `betas`、`frame_varying_keys`、`transform_mat_neutral_pose` 和 posed Gaussian path。最后用 `Source Reading Order` 回到源码逐步验证，遇到 shape 或 config 细节时结合各节 `Caveats` 阅读。
 
 ## Scope / Non-goals
 
-本阶段覆盖：
+本文覆盖：
 
 - main execution entry：`app.py::launch_gradio_app()`、`demo_lhmpp()` / inner `core_fn()`。
 - non-UI mirror：`scripts/test/test_app_video.py`。
@@ -14,8 +29,6 @@
 
 本阶段不覆盖：
 
-- DINOv2 image encoder、point-image transformer、GS renderer、neural renderer 的详细 network design。
-- SMPL-X skinning / deformation / `_transform_points()` 的深入解释。
 - 训练流程、loss、benchmark、模型质量改进。
 - 任何 LHM++ runtime source code 修改。
 
@@ -198,6 +211,17 @@ LHM++ demo path has a subtle but important distinction:
 
 本节展开上面 flowchart 中 `infer_single_view()` 和 `animation_infer()` 两块内部发生的 network design。阅读时可以把它看成一个两阶段系统：第一阶段从 reference images 生成 reusable Gaussian/avatar state；第二阶段把这个 state 放到每一帧 motion/camera 条件下，用 GSPlat feature rendering + DPT-style neural renderer 输出 RGB + mask。
 
+```mermaid
+flowchart TD
+    A["inference_results()<br/>scripts/inference/app_inference.py"] --> B["infer_single_view()<br/>reconstruct once"]
+    B --> C["DINOv2 image encoder<br/>cls_feats + image_feats"]
+    C --> D["forward_latent_points()<br/>point-image transformer"]
+    D --> E["query_feats / gs_hidden_features<br/>image_latents / motion_emb"]
+    E --> F["renderer.forward_gs()<br/>neutral query_points"]
+    F --> G["Gaussian attributes<br/>offset_xyz, opacity,<br/>rotation, scaling, features"]
+    G --> H["Reusable canonical Gaussian avatar state"]
+```
+
 ### App-to-render network boundary
 
 `scripts/inference/app_inference.py::inference_results()` 是 network path 的总入口。它先把 `ref_img_tensors` 增加 batch 维度后传入 `model.infer_single_view()`，得到 `gs_model_list`、`query_points`、`transform_mat_neutral_pose`、`gs_hidden_features`、`image_latents`、`motion_emb`，以及可选的 `pos_emb`。随后它把 `transform_mat_neutral_pose` 写回 batched `smplx_params`，再按 frame batch 切分 `root_pose`、`body_pose`、hands、eyes、`expr`、`trans`、camera intrinsics 等 frame-varying keys，调用 `model.animation_infer()` 输出 `batch_rgb` 和 `batch_mask`。
@@ -298,6 +322,20 @@ neural_renderer(image_latents, render_results["comp_features"], motion_emb, rend
 
 本节解释 Phase 2 中刻意保留的 SMPL-X driving / deformation 细节：reference person 的 shape 如何进入系统、selected driving motion 的 per-frame 参数如何被 batch 切片，以及 canonical / neutral Gaussian avatar 如何通过 SMPL-X skinning 变成每一帧 posed Gaussian models。核心 source path 是 `scripts/inference/app_inference.py::inference_results()` -> `core/models/modeling_humana4o_lrm.py::infer_single_view()` -> `core/models/modeling_humana4o_lrm.py::animation_infer()` -> `core/models/rendering/base_gs_render.py::forward_animate_gs()`。
 
+```mermaid
+flowchart TD
+    A["Reference image<br/>imgs[0]"] --> B["PoseEstimator.__call__()<br/>reference shape betas"]
+    C["Selected motion asset<br/>smplx_params/*.json"] --> D["obtain_motion_sequence()<br/>prepare_motion_seqs_eval()"]
+    B --> E["batch_smplx_params<br/>betas + transform_mat_neutral_pose"]
+    D --> F["frame_varying_keys<br/>pose, expr, trans,<br/>camera metadata"]
+    E --> G["animation_infer()"]
+    F --> G
+    G --> H["forward_animate_gs()"]
+    H --> I["animate_gs_model()<br/>_transform_points()"]
+    I --> J["posed Gaussian models"]
+    J --> K["GSPlat features + neural renderer<br/>RGB / mask frames"]
+```
+
 ### Shape betas vs driving motion parameters
 
 Phase 3 最容易混淆的一点是：`betas` 和 frame-wise SMPL-X motion 并不来自同一个地方。
@@ -390,9 +428,9 @@ transform_mat_neutral_pose
 - `smplx_voxel_skinning.py` 里包含完整的 lower-level deformation details，例如 expression offsets、shape blendshapes、LBS-style transforms 和 voxel skinning weights。本文只解释它们在 pipeline 中的位置，不做完整数学 derivation。
 - Phase 3 仍然是 documentation-only work：不修改 `app.py`、`core/`、`engine/`、`scripts/` 下的 runtime/model/source files。
 
-## What Phase 1 Intentionally Defers
+## Final Scope Notes
 
-本文档只建立 skeleton。以下内容留给后续阶段：
+本文档已经把 Phase 1 的 pipeline skeleton、Phase 2 的 network design、Phase 3 的 SMPL-X driving 串成同一份 final research notes。以下条目保留为 scope marker，说明相关内容已在对应 section 中展开：
 
 - Phase 2: `DINOv2 image encoder`、`forward_latent_points()`、point-image transformer、`renderer.forward_gs()`、GSPlat feature renderer、DPT-style neural renderer 的 network design 已在本文上方展开。
 - Phase 3: `PoseEstimator` 输出和 motion assets 的 SMPL-X 参数区别、frame-varying keys、neutral query points、`transform_mat_neutral_pose`、`animate_gs_model()`、`_transform_points()`、skinning/deformation 如何驱动 Gaussian avatar，已在本文上方展开。

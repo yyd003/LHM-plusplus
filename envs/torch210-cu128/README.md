@@ -74,20 +74,41 @@ python -m pip install --no-cache-dir \
   -r envs/torch210-cu128/requirements-extensions.txt
 ```
 
-### Other compiled extensions
+### Locally built CUDA extensions
 
-At the time this environment was created, the MiroPsota index did not contain
-PyTorch 2.10 / CUDA 12.8 wheels for `flash-attn`,
-`diff-gaussian-rasterization`, or `simple-knn`. Install a matching wheel when
-one becomes available, or build the packages against this environment. Do not
-install the available PyTorch 2.8 wheels into this environment.
+The MiroPsota index does not currently publish PyTorch 2.10 / CUDA 12.8 wheels
+for `flash-attn`, `diff-gaussian-rasterization`, or `simple-knn`. Matching
+wheels were therefore built locally from the same source revisions used by
+the MiroPsota packages where available:
 
-`flash-attn==2.8.3.post1` recognizes CUDA 12.8 and generates `sm_120` code when
-built from source, but its build currently compiles kernels for several older
-architectures as well. A full local build is therefore expensive and is not
-part of the reproducible core setup. Until a matching PyTorch 2.10 wheel is
-available, Sonata will use its existing optional non-Flash fallback when the
-package is absent. PyTorch SDPA and the xFormers path remain accelerated.
+- `diff-gaussian-rasterization`: commit `9c5c2028f6fbee2be239bc4c9421ff894fe4fbe0`
+- `simple-knn`: commit `86710c2d4b46680c02301765dd79e465819c8f19`
+- `flash-attn`: tag `v2.8.3.post1`
+
+The FlashAttention wheel is deliberately compiled only for `sm_120`. It is an
+RTX 50-series/Blackwell-specific wheel and must not be installed on older GPU
+architectures.
+
+Build and install the three wheels, then install gsplat:
+
+```bash
+bash envs/torch210-cu128/build_cuda_extensions.sh
+```
+
+The default wheelhouse is outside the Git repository at:
+
+```text
+../wheelhouse/pt210-cu128/
+```
+
+The generated wheels are not committed because they are large, Python/ABI
+specific binary artifacts. On this machine their SHA-256 hashes are:
+
+```text
+fed9ec54bd81cc0e21fca102643ac831583c59d3cac6ee881d0301f6a44c60cd  diff_gaussian_rasterization-0.0.0-cp311-cp311-linux_x86_64.whl
+16fcf7d7cdecf78478c8f8a8eedf4832d8bb26b24f3db7a1f98a78ab627716f4  simple_knn-0.0.0-cp311-cp311-linux_x86_64.whl
+408087fd5cfa0643d7902e446fc95940625b587dced25de67b4dbc348c9c061e  flash_attn-2.8.3.post1-cp311-cp311-linux_x86_64.whl
+```
 
 `spconv-cu128` is maintained through the
 [rathaROG/cumm-spconv package index](https://ratharog.github.io/cumm-spconv/)

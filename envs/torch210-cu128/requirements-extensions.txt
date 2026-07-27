@@ -5,3 +5,5 @@
 pytorch3d==0.7.9+pt2.10.0cu128
 torch_scatter==2.1.2+pt210cu128
 spconv-cu128==2.4.1
+gsplat==1.5.3
+einops==0.8.2

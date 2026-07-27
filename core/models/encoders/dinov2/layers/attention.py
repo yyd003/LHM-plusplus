@@ -13,6 +13,7 @@ import warnings
 
 from torch import Tensor
 from torch import nn
+from torch.nn import functional as F
 
 
 logger = logging.getLogger("dinov2")
@@ -53,7 +54,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=proj_bias)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def _forward_sdpa(self, x: Tensor) -> Tensor:
         B, N, C = x.shape
         qkv = (
             self.qkv(x)
@@ -61,16 +62,19 @@ class Attention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
 
-        q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
-        attn = q @ k.transpose(-2, -1)
-
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        q, k, v = qkv.unbind(0)
+        x = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.attn_drop.p if self.training else 0.0,
+        ).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self._forward_sdpa(x)
 
 
 class MemEffAttention(Attention):
@@ -90,7 +94,7 @@ class MemEffAttention(Attention):
         except NotImplementedError:
             if attn_bias is not None:
                 raise
-            return super().forward(x)
+            return self._forward_sdpa(x)
         x = x.reshape([B, N, C])
 
         x = self.proj(x)

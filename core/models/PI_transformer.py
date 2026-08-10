@@ -10,7 +10,7 @@ from typing import Any, Dict
 import numpy as np
 import torch
 import torch.nn as nn
-from accelerate.logging import get_logger
+import logging
 from diffusers.utils import is_torch_version
 from einops import rearrange
 
@@ -24,7 +24,7 @@ from core.models.encoders.sonata.structure import Point
 from core.models.transformer_block.transformer_dit import SD3PMMJointTransformerBlock
 from core.models.vggt_transformer import VGGTAggregator
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class PITransformerA4OBase(nn.Module):

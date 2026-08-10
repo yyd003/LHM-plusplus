@@ -251,8 +251,6 @@ if __name__ == "__main__":
 
     slide_window = SlidingAverageTimer(window_size=10)
 
-    import pdb
-
     for i in range(100):
         with torch.no_grad():
             slide_window.start()
@@ -263,7 +261,7 @@ if __name__ == "__main__":
                 (640 // 14) * 14,
                 (384 // 14) * 14,
             )
-            pdb.set_trace()
+            print(f"output shapes: {[tuple(x.shape) for x in output]}")
             torch.cuda.synchronize()
             slide_window.record()
             print(slide_window)

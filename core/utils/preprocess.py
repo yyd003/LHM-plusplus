@@ -19,9 +19,13 @@
 # @Time          : 2025-08-31 10:02:15
 # @Function      : Image preprocessing with rembg
 
-import numpy as np
-import rembg
+import os
+from pathlib import Path
+
 import cv2
+import numpy as np
+import onnxruntime as ort
+import rembg
 
 
 class Preprocessor:
@@ -29,10 +33,34 @@ class Preprocessor:
     Preprocessing under cv2 conventions.
     """
 
-    def __init__(self):
+    def __init__(self, device: str = "cuda", model_home: str | None = None):
+        if model_home is None:
+            model_home = str(Path(__file__).resolve().parents[2] / "pretrained_models" / "u2net")
+        os.environ.setdefault("U2NET_HOME", model_home)
+
+        available = ort.get_available_providers()
+        if device.startswith("cuda"):
+            if "CUDAExecutionProvider" not in available:
+                raise RuntimeError(
+                    "CUDA background removal was requested, but ONNX Runtime does not "
+                    f"provide CUDAExecutionProvider (available: {available})"
+                )
+            # ORT's optional CUDA/cuDNN wheels live under site-packages/nvidia.
+            # Preload them explicitly so they can coexist with PyTorch's CUDA runtime.
+            if hasattr(ort, "preload_dlls"):
+                ort.preload_dlls(cuda=True, cudnn=True, msvc=False, directory="")
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        else:
+            providers = ["CPUExecutionProvider"]
         self.rembg_session = rembg.new_session(
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            providers=providers,
         )
+        active_providers = self.rembg_session.inner_session.get_providers()
+        if device.startswith("cuda") and "CUDAExecutionProvider" not in active_providers:
+            raise RuntimeError(
+                "ONNX Runtime advertised CUDAExecutionProvider but failed to activate it; "
+                f"the rembg session fell back to {active_providers}"
+            )
 
     def preprocess(
         self,

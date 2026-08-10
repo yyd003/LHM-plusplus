@@ -29,6 +29,7 @@ torch._dynamo.config.disable = True
 from tqdm import tqdm
 
 from core.runners.infer.utils import prepare_motion_seqs, prepare_motion_seqs_eval
+from core.structures.bbox import Bbox
 from core.utils.hf_hub import wrap_model_hub
 from scripts.inference.utils import get_smplx_params, obtain_motion_sequence
 
@@ -423,8 +424,21 @@ def inference_video_mode(
     smplx_path = os.path.join(motion_path, "smplx_params")
     mask_path = os.path.join(motion_path, "samurai_seg")
     motion_files = sorted(glob.glob(os.path.join(smplx_path, "*.json")))
+    if not motion_files:
+        raise FileNotFoundError(f"No SMPL-X JSON files found under {smplx_path}")
     motion_ids = [os.path.basename(f).replace(".json", "") for f in motion_files]
     mask_paths = [os.path.join(mask_path, f"{mid}.png") for mid in motion_ids]
+    bbox_json_path = os.path.join(motion_path, "bbox", "bbox.json")
+    bbox_dict = {}
+    if os.path.isfile(bbox_json_path):
+        import json
+
+        with open(bbox_json_path) as reader:
+            bbox_dict = json.load(reader)
+    bbox_list = []
+    for motion_id in motion_ids:
+        bbox = bbox_dict.get(motion_id)
+        bbox_list.append(Bbox(bbox, mode="xywh").to_whwh() if bbox is not None else None)
 
     # Prepare motion sequences with or without masks
     motion_size = 100 if debug else 1000
@@ -432,6 +446,7 @@ def inference_video_mode(
         motion_seqs = prepare_motion_seqs_eval(
             obtain_motion_sequence(smplx_path),
             mask_paths=mask_paths,
+            bbox_list=bbox_list,
             bg_color=1.0,
             aspect_standard=5.0 / 3,
             enlarge_ratio=[1.0, 1.0],

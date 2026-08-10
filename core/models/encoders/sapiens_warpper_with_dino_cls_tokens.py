@@ -2,7 +2,6 @@ import functools
 import gc
 import multiprocessing as mp
 import os
-import pdb
 import time
 import traceback as tb
 from argparse import ArgumentParser
@@ -18,10 +17,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-from accelerate.logging import get_logger
+import logging
 from tqdm import tqdm
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 timings = {}
 BATCH_SIZE = 64
@@ -119,7 +118,6 @@ def feat_save(feature, output_path):
 
 
 def load_model(checkpoint, use_torchscript=False):
-    pdb.set_trace()
     if use_torchscript:
         return torch.jit.load(checkpoint)
     else:
@@ -304,7 +302,6 @@ def main():
 
     image_names = []
 
-    pdb.set_trace()
 
     for batch_idx, (batch_image_name, batch_orig_imgs, batch_imgs) in tqdm(
         enumerate(inference_dataloader), total=len(inference_dataloader)

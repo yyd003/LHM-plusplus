@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.logging import get_logger
+import logging
 from diffusers.utils import is_torch_version
 from einops import rearrange
 
@@ -35,7 +35,7 @@ from core.models.vggt.heads.shape_head import ShapeHead
 from core.models.vggt_transformer import VGGTAggregator
 from core.modules.embed import PointEmbed
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def scale_intrs(intrs, ratio_x, ratio_y):

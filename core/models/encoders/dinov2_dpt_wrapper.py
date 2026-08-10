@@ -15,11 +15,11 @@
 
 import torch
 import torch.nn as nn
-from accelerate.logging import get_logger
+import logging
 
 from core.models.encoders.dinov2_dpt import DINODPT
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Dinov2DPTWrapper(nn.Module):

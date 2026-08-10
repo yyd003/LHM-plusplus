@@ -742,8 +742,9 @@ def setup_loaders_and_inputs(args: argparse.Namespace):
 
     pose_estimator = None
     if cfg.get("use_smplx_shape_estimator", True):
-        pose_estimator = PoseEstimator("./pretrained_models/human_model_files/", device="cpu")
-        pose_estimator.device = device
+        pose_estimator = PoseEstimator(
+            "./pretrained_models/human_model_files/", device=device
+        )
 
     image_paths = _resolve_image_paths(args)
     imgs_pil = [Image.open(p) for p in image_paths]

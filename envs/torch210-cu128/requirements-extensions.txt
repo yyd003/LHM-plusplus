@@ -1,9 +1,0 @@
---extra-index-url https://miropsota.github.io/torch_packages_builder
---extra-index-url https://ratharog.github.io/cumm-spconv/
---find-links https://data.pyg.org/whl/torch-2.10.0+cu128.html
-
-pytorch3d==0.7.9+pt2.10.0cu128
-torch_scatter==2.1.2+pt210cu128
-spconv-cu128==2.4.1
-gsplat==1.5.3
-einops==0.8.2

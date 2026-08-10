@@ -15,10 +15,10 @@
 
 import torch
 import torch.nn as nn
-from accelerate.logging import get_logger
+import logging
 from core.models.encoders.dinov2_unet import DINOBase
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Dinov2UnetWrapper(nn.Module):

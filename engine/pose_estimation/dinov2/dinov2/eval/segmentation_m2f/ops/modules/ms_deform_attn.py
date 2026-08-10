@@ -9,31 +9,7 @@ import warnings
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.autograd import Function
-from torch.cuda.amp import custom_fwd
 from torch.nn.init import constant_, xavier_uniform_
-
-
-class MSDeformAttnFunction(Function):
-    @staticmethod
-    @custom_fwd(cast_inputs=torch.float32)
-    def forward(
-        ctx,
-        value,
-        value_spatial_shapes,
-        value_level_start_index,
-        sampling_locations,
-        attention_weights,
-        im2col_step,
-    ):
-        output = ms_deform_attn_core_pytorch(
-            value,
-            value_spatial_shapes,
-            #  value_level_start_index,
-            sampling_locations,
-            attention_weights,
-        )
-        return output
 
 
 def ms_deform_attn_core_pytorch(
@@ -215,13 +191,16 @@ class MSDeformAttn(nn.Module):
                     reference_points.shape[-1]
                 )
             )
-        output = MSDeformAttnFunction.apply(
-            value,
+        # The upstream evaluator wrapped this pure-PyTorch reference path in
+        # an autograd.Function that implemented only ``forward``. PyTorch 2.10
+        # correctly rejects backward through such a Function. Calling the
+        # differentiable PyTorch implementation directly preserves gradients
+        # for value, offsets and attention weights and needs no custom kernel.
+        output = ms_deform_attn_core_pytorch(
+            value.float(),
             input_spatial_shapes,
-            input_level_start_index,
-            sampling_locations,
-            attention_weights,
-            self.im2col_step,
+            sampling_locations.float(),
+            attention_weights.float(),
         )
         output = self.output_proj(output)
         return output

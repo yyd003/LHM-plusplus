@@ -2,20 +2,26 @@
 # Copyright (c) 2024-present NAVER Corp.
 # CC BY-NC-SA 4.0 license
 
-import torch
-from torch import nn
-from torch import nn
+import os
+import pickle
+
+import numpy as np
+import roma
 import smplx
 import torch
-import numpy as np
-import pose_utils
-from pose_utils import inverse_perspective_projection, perspective_projection
-import roma
-import pickle
-import os
-from pose_utils.constants_service import SMPLX_DIR
-from pose_utils.rot6d import rotation_6d_to_matrix
 from smplx.lbs import vertices2joints
+from torch import nn
+
+try:
+    from .. import pose_utils
+    from ..pose_utils import inverse_perspective_projection, perspective_projection
+    from ..pose_utils.constants_service import SMPLX_DIR
+    from ..pose_utils.rot6d import rotation_6d_to_matrix
+except ImportError:  # Backward compatibility for legacy top-level imports.
+    import pose_utils
+    from pose_utils import inverse_perspective_projection, perspective_projection
+    from pose_utils.constants_service import SMPLX_DIR
+    from pose_utils.rot6d import rotation_6d_to_matrix
 
 
 class SMPL_Layer(nn.Module):

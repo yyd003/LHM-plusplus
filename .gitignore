@@ -86,3 +86,9 @@ release_tools/
 .planning/
 .agents/
 .codex/
+
+# Generated package metadata
+lib/pointops/*.egg-info/
+
+# Papers and local reading notes are kept in /home/dreams/yaodong/papers
+papers/

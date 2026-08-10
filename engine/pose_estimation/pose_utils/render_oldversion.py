@@ -116,7 +116,6 @@ def create_scene(
     cam = trimesh.creation.cone(width, height, sections=4, transform=transform)
     # cam.apply_transform(transform)
     # import ipdb
-    # ipdb.set_trace()
 
     # vertices = geotrf(transform, cam.vertices[[4,5,1,3]])
     vertices = cam.vertices[[4, 5, 1, 3]]
@@ -152,7 +151,6 @@ def create_scene(
     rot2 = np.eye(4)
     rot2[:3, :3] = Rotation.from_euler("z", np.deg2rad(2)).as_matrix()
     # import ipdb
-    # ipdb.set_trace()
     # vertices = cam.vertices
     # print(rot2)
     vertices = np.r_[cam.vertices, 0.95 * cam.vertices, geotrf(rot2, cam.vertices)]

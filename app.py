@@ -613,9 +613,8 @@ def launch_gradio_app() -> None:
         lhmpp.to("cuda")
         if cfg.get("use_smplx_shape_estimator", True):
             pose_estimator = PoseEstimator(
-                "./pretrained_models/human_model_files/", device="cpu"
+                "./pretrained_models/human_model_files/", device="cuda"
             )
-            pose_estimator.device = "cuda"
         else:
             pose_estimator = None
 

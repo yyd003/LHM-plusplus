@@ -16,8 +16,6 @@ import torch
 from torch.nn import functional as F
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import pdb
-
 import torch
 from PIL import Image
 
@@ -45,11 +43,18 @@ class EasyStyleGAN_series_model:
         ),
     ):
 
-        self.stylegan_human_D = (
-            legacy.load_network_pkl(open(model_path, "rb"))["D"]
-            .to(avaliable_device())
-            .float()
-        )
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(
+                "StyleGAN2-Human checkpoint is optional and was not found at "
+                f"{model_path!r}. Provide model_path explicitly to use this "
+                "legacy discriminator; LHM++ inference does not require it."
+            )
+        with open(model_path, "rb") as checkpoint_file:
+            self.stylegan_human_D = (
+                legacy.load_network_pkl(checkpoint_file)["D"]
+                .to(avaliable_device())
+                .float()
+            )
         for para in self.stylegan_human_D.parameters():
             para.requires_grad = False
         self.stylegan_human_D.eval()
@@ -88,9 +93,8 @@ def warmup_call():
     print("clean cuda.....")
 
 
-warmup_call()
-
 if __name__ == "__main__":
+    warmup_call()
     import cv2
     import numpy as np
 
@@ -145,15 +149,12 @@ if __name__ == "__main__":
     print(logit, logit.mean())
     logit_2 = model(cat_img[1:].cuda(), None)
 
-    print(logit_1[1:] - logit_2[:-1])
-
-    pdb.set_trace()
+    print("logit delta:", logit_1[1:] - logit_2[:-1])
     # logit = model(cat_img.cuda(), None)
     # # single_img = cat_img[:1]
     # # repeat_single_img = single_img.repeat(32, 1, 1, 1)
     # # logit = model(repeat_single_img.cuda(), None)
     # print(logit)
-    # pdb.set_trace()
     # if logit > -6.5:
     #     img = (
     #         ((img[0] + 1) * 255.0 / 2)

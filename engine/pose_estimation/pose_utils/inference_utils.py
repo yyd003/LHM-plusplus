@@ -1,7 +1,10 @@
 import os
 import torch
 
-from pose_utils.camera import get_focalLength_from_fieldOfView
+try:
+    from .camera import get_focalLength_from_fieldOfView
+except ImportError:  # Backward compatibility for legacy top-level imports.
+    from pose_utils.camera import get_focalLength_from_fieldOfView
 
 
 def get_camera_parameters(

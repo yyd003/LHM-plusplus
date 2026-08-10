@@ -3,7 +3,7 @@
 # This source code is licensed under the Apache License, Version 2.0
 # found in the LICENSE file in the root directory of this source tree.
 
-from mmcv.utils import Registry, build_from_cfg
+from mmengine.registry import Registry, build_from_cfg
 
 BBOX_SAMPLERS = Registry("bbox_sampler")
 BBOX_CODERS = Registry("bbox_coder")

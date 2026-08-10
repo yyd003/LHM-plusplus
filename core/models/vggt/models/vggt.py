@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import pdb
 
 import torch
 import torch.nn as nn
@@ -77,7 +76,6 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
 
         predictions = {}
 
-        pdb.set_trace()
 
         with torch.cuda.amp.autocast(enabled=False):
             if self.camera_head is not None:

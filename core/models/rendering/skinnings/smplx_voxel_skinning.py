@@ -718,19 +718,30 @@ class SMPLXVoxelSkinning(nn.Module):
                     .view(-1, *joint_offset.shape[1:])
                 )
 
-        # Handle expression offsets
+        # Handle expression offsets. Expression batches need the same multi-view
+        # expansion as shape parameters before broadcasting over query vertices.
         expr_offset = 0.0
         if "expr" in smplx_data:
+            expr_param = self._expand_for_views(smplx_data["expr"], batch_size)
+            if expr_param.shape[-1] != self.expr_dirs.shape[-1]:
+                raise ValueError(
+                    "SMPL-X expression dimension does not match expression directions: "
+                    f"expr.shape={tuple(expr_param.shape)}, "
+                    f"expr_dirs.shape={tuple(self.expr_dirs.shape)}"
+                )
             expr_offset = (
-                smplx_data["expr"].unsqueeze(1).unsqueeze(1) * self.expr_dirs
+                expr_param.unsqueeze(1).unsqueeze(1) * self.expr_dirs
             ).sum(-1)
 
         try:
             mean_3d = mean_3d + expr_offset
-        except:
-            import pdb
-
-            pdb.set_trace()
+        except RuntimeError as exc:
+            offset_shape = tuple(expr_offset.shape) if torch.is_tensor(expr_offset) else ()
+            raise ValueError(
+                "Expression offsets are incompatible with neutral coordinates: "
+                f"neutral_coords.shape={tuple(mean_3d.shape)}, "
+                f"expr_offset.shape={offset_shape}"
+            ) from exc
 
         # Create mask for fixed parts (hands and face)
         mask = (
@@ -1103,6 +1114,11 @@ class SMPLXVoxelSkinning(nn.Module):
 
         if tensor.shape[0] == target_batch_size:
             return tensor
+        if tensor.shape[0] <= 0 or target_batch_size % tensor.shape[0] != 0:
+            raise ValueError(
+                "Cannot expand tensor batch for multiple views: "
+                f"source batch={tensor.shape[0]}, target batch={target_batch_size}"
+            )
 
         num_views = target_batch_size // tensor.shape[0]
         return (

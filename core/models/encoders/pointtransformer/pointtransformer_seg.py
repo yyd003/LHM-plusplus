@@ -265,7 +265,6 @@ class PointTransformerSeg(nn.Module):
         # p4, x4, o4 = self.enc4([p3, x3, o3])
         # p5, x5, o5 = self.enc5([p4, x4, o4])
 
-        # pdb.set_trace()
 
         # x5 = self.dec5[1:]([p5, self.dec5[0]([p5, x5, o5]), o5])[1]
         # x4 = self.dec4[1:]([p4, self.dec4[0]([p4, x4, o4], [p5, x5, o5]), o4])[1]

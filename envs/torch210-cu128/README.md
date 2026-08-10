@@ -11,15 +11,16 @@ RTX 5090 (compute capability 12.0).
 - torchaudio 2.10.0 + CUDA 12.8
 - xFormers 0.0.35
 
-The repository's root `requirements.txt` remains the upstream PyTorch 2.3 /
-CUDA 12.1 contract. Do not install it verbatim after creating this environment,
-because it would downgrade PyTorch and xFormers.
+The repository root `requirements.txt` has been rebuilt from the verified shared
+`pt210` runtime. Install it only with `--no-deps`; local source projects and CUDA
+extensions must additionally use `--no-build-isolation` so dependency resolution
+cannot replace Torch, OpenCV, ORT, or the Sapiens forks.
 
 ## Create the environment
 
 ```bash
-conda create -n lhmpp-pt210-cu128 python=3.11 pip -y
-conda activate lhmpp-pt210-cu128
+conda create -n pt210 python=3.11 pip -y
+conda activate pt210
 
 python -m pip install \
   torch==2.10.0 \
@@ -32,11 +33,8 @@ python -m pip install \
   --index-url https://download.pytorch.org/whl/cu128
 ```
 
-The same pinned core set is available as:
-
-```bash
-python -m pip install -r envs/torch210-cu128/requirements-core.txt
-```
+On this machine the shared environment already exists at
+`/home/dreams/.conda/envs/pt210`. Do not recreate it per project.
 
 ## Legacy CUDA extensions
 
@@ -66,13 +64,9 @@ python -m pip install --no-cache-dir torch_scatter \
   -f https://data.pyg.org/whl/torch-2.10.0+cu128.html
 ```
 
-After installing the core requirements, both currently verified extensions can
-also be installed together:
-
-```bash
-python -m pip install --no-cache-dir \
-  -r envs/torch210-cu128/requirements-extensions.txt
-```
+The verified extension versions are now recorded in the repository root
+`requirements.txt`; install existing wheels with `--no-deps` and build local
+extensions with `--no-deps --no-build-isolation`.
 
 ### Locally built CUDA extensions
 
@@ -121,17 +115,49 @@ python -m pip install --no-cache-dir \
 ```
 
 Repository-local extensions such as `lib/pointops` must be rebuilt inside the
-PyTorch 2.10 environment.
+PyTorch 2.10 environment. PointOps imports PyTorch from `setup.py`, so an isolated
+PEP 517 build can select a different PyTorch/CUDA stack. Build it without build
+isolation, save the resulting wheel in the local wheelhouse, and then let
+`requirements.txt` install that wheel:
+
+```bash
+/home/dreams/.conda/envs/pt210/bin/python -m pip wheel \
+  --no-build-isolation --no-deps \
+  /home/dreams/yaodong/LHM-plusplus/lib/pointops \
+  --wheel-dir /home/dreams/yaodong/wheelhouse/pt210-cu128
+
+/home/dreams/.conda/envs/pt210/bin/python -m pip install \
+  --no-index --find-links /home/dreams/yaodong/wheelhouse/pt210-cu128 \
+  --force-reinstall --no-deps pointops==0.0.0
+```
+
+The pip option is `--no-build-isolation` (there is no
+`--no-build-isolation` option). A requirements file cannot attach this
+build option to only one dependency, which is why the checked-in requirements
+resolve the prebuilt wheel through `--find-links` instead of rebuilding PointOps.
+
+
+## ONNX Runtime CUDA loader
+
+ORT 1.26 and PyTorch 2.10 share the existing CUDA 12 wheel libraries. Project
+entry points call `onnxruntime.preload_dlls()`, and the provider RUNPATH can be
+repaired after any ORT reinstall without adding another CUDA runtime:
+
+```bash
+/home/dreams/.conda/envs/pt210/bin/python \
+  envs/torch210-cu128/repair_ort_cuda_runpath.py \
+  --verify-model pretrained_models/u2net/u2net.onnx
+```
 
 ## Verify the attention backends
 
 Run the checked-in probe from the repository root:
 
 ```bash
-conda run -n lhmpp-pt210-cu128 \
+conda run -n pt210 \
   python envs/torch210-cu128/verify_attention.py
 
-conda run -n lhmpp-pt210-cu128 \
+conda run -n pt210 \
   python envs/torch210-cu128/verify_extensions.py
 ```
 

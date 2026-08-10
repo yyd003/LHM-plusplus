@@ -2,35 +2,48 @@
 # Copyright (c) 2024-present NAVER Corp.
 # CC BY-NC-SA 4.0 license
 
+import copy
 import os
 import sys
-
-sys.path.append("./")
-sys.path.append("./engine")
-sys.path.append("./engine/pose_estimation")
-import copy
 
 import einops
 import numpy as np
 import roma
 import torch
 import torch.nn as nn
-from blocks import (
-    Dinov2Backbone,
-    FourierPositionEncoding,
-    SMPL_Layer,
-    TransformerDecoder,
-)
-from pose_utils import (
-    inverse_perspective_projection,
-    pad_to_max,
-    rebatch,
-    rot6d_to_rotmat,
-    undo_focal_length_normalization,
-    undo_log_depth,
-    unpatch,
-)
-from torch import nn
+
+try:
+    from .blocks import (
+        Dinov2Backbone,
+        FourierPositionEncoding,
+        SMPL_Layer,
+        TransformerDecoder,
+    )
+    from .pose_utils import (
+        inverse_perspective_projection,
+        pad_to_max,
+        rebatch,
+        rot6d_to_rotmat,
+        undo_focal_length_normalization,
+        undo_log_depth,
+        unpatch,
+    )
+except ImportError:  # Backward compatibility for legacy top-level execution.
+    from blocks import (
+        Dinov2Backbone,
+        FourierPositionEncoding,
+        SMPL_Layer,
+        TransformerDecoder,
+    )
+    from pose_utils import (
+        inverse_perspective_projection,
+        pad_to_max,
+        rebatch,
+        rot6d_to_rotmat,
+        undo_focal_length_normalization,
+        undo_log_depth,
+        unpatch,
+    )
 
 
 def unravel_index(index, shape):
@@ -94,7 +107,6 @@ class Model(nn.Module):
                 max_resolution=camera_embedding_max_resolution,
             )
             # import pdb
-            # pdb.set_trace()
             self.camera_embed_dim = self.camera.channels
 
         # Heads - Detection

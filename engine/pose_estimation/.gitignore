@@ -22,3 +22,6 @@ data
 logs
 .vscode
 workspace
+# DINOv2 source package; this is code, not generated dataset content.
+!dinov2/dinov2/data/
+!dinov2/dinov2/data/**

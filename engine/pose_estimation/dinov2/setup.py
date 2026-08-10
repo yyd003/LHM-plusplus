@@ -31,7 +31,13 @@ def get_requirements(
 ) -> Tuple[List[str], List[str]]:
     requirements = []
     extra_indices = []
-    with open(path) as f:
+    path = Path(path)
+    # LHM++ owns the validated dependency set in the repository root.
+    # The original DINOv2 requirement files targeted PyTorch 2.0/CUDA 11.7
+    # and are intentionally removed for the pt210 environment.
+    if not path.is_file():
+        return requirements, extra_indices
+    with path.open(encoding="utf-8") as f:
         for line in f.readlines():
             line = line.rstrip("\r\n")
             if line.startswith("--extra-index-url "):

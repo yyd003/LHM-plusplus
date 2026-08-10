@@ -28,9 +28,9 @@ from omegaconf import DictConfig, OmegaConf
 from PIL import Image
 
 from core.runners.infer.utils import (
-    prepare_motion_seqs_cano,
     prepare_motion_seqs_eval,
 )
+from core.structures.bbox import Bbox
 from core.utils.hf_hub import wrap_model_hub
 
 
@@ -180,6 +180,56 @@ def obtain_motion_sequence(motion_seqs):
         smplx_list.append(smplx_params)
 
     return smplx_list
+
+
+def prepare_canonical_motion_sequence(
+    motion_path: str,
+    cfg: Dict,
+    *,
+    debug: bool = False,
+) -> Dict:
+    """Load the current motion directory layout with the current inference API."""
+    smplx_path = os.path.join(motion_path, "smplx_params")
+    mask_path = os.path.join(motion_path, "samurai_seg")
+    bbox_json_path = os.path.join(motion_path, "bbox", "bbox.json")
+
+    smplx_files = sorted(glob.glob(os.path.join(smplx_path, "*.json")))
+    if not smplx_files:
+        raise FileNotFoundError(f"No SMPL-X JSON files found under {smplx_path}")
+
+    bbox_dict = {}
+    if os.path.isfile(bbox_json_path):
+        with open(bbox_json_path) as reader:
+            bbox_dict = json.load(reader)
+
+    motion_ids = [os.path.splitext(os.path.basename(path))[0] for path in smplx_files]
+    mask_paths = [os.path.join(mask_path, f"{motion_id}.png") for motion_id in motion_ids]
+    bbox_list = []
+    for motion_id in motion_ids:
+        bbox = bbox_dict.get(motion_id)
+        bbox_list.append(Bbox(bbox, mode="xywh").to_whwh() if bbox is not None else None)
+
+    valid_motion_ids = [
+        int(motion_id) if motion_id.isdigit() else motion_id
+        for motion_id, current_mask in zip(motion_ids, mask_paths)
+        if os.path.isfile(current_mask)
+    ]
+    motion = prepare_motion_seqs_eval(
+        obtain_motion_sequence(smplx_path),
+        mask_paths=mask_paths,
+        bbox_list=bbox_list,
+        bg_color=1.0,
+        aspect_standard=5.0 / 3,
+        enlarge_ratio=[1.0, 1.0],
+        tgt_size=cfg.get("render_size", 420),
+        render_image_res=cfg.get("render_size", 420),
+        need_mask=cfg.get("motion_img_need_mask", False),
+        vis_motion=cfg.get("vis_motion", False),
+        motion_size=100 if debug else 1000,
+        specific_id_list=None,
+    )
+    motion["motion_id"] = valid_motion_ids[: motion["render_c2ws"].shape[1]]
+    return motion
 
 
 def _build_model(cfg):
@@ -553,31 +603,7 @@ def lhm_validation_inference(
         **kwargs,
     )
 
-    # Prepare motion sequences
-    smplx_path = os.path.join(motion_path, "smplx_params")
-    mask_path = os.path.join(motion_path, "samurai_seg")
-    motion_seqs = sorted(glob.glob(os.path.join(smplx_path, "*.json")))
-    motion_id_seqs = [
-        motion_seq.split("/")[-1].replace(".json", "") for motion_seq in motion_seqs
-    ]
-    mask_paths = [
-        os.path.join(mask_path, motion_id_seq + ".png")
-        for motion_id_seq in motion_id_seqs
-    ]
-
-    motion_seqs = prepare_motion_seqs_cano(
-        obtain_motion_sequence(smplx_path),
-        mask_paths=mask_paths,
-        bg_color=1.0,
-        aspect_standard=5.0 / 3,
-        enlarge_ratio=[1.0, 1.0],
-        tgt_size=cfg.get("render_size", 420),
-        render_image_res=cfg.get("render_size", 420),
-        need_mask=cfg.get("motion_img_need_mask", False),
-        vis_motion=cfg.get("vis_motion", False),
-        motion_size=100 if debug else 1000,
-        specific_id_list=None,
-    )
+    motion_seqs = prepare_canonical_motion_sequence(motion_path, cfg, debug=debug)
 
     motion_id = motion_seqs["motion_id"]
 
@@ -680,19 +706,7 @@ def lhm_validation_inference_gs(
         **kwargs,
     )
 
-    # Prepare motion sequences
-    smplx_path = os.path.join(motion_path, "smplx_params")
-    motion_seqs = prepare_motion_seqs_eval(
-        obtain_motion_sequence(smplx_path),
-        bg_color=1.0,
-        aspect_standard=5.0 / 3,
-        enlarge_ratio=[1.0, 1.0],
-        render_image_res=cfg.get("render_size", 384),
-        need_mask=cfg.get("motion_img_need_mask", False),
-        vis_motion=cfg.get("vis_motion", False),
-        motion_size=1,  # a trick, only choose one, as we do not query the motion
-        specific_id_list=None,
-    )
+    motion_seqs = prepare_canonical_motion_sequence(motion_path, cfg, debug=True)
 
     # split_dataset
 
@@ -797,6 +811,16 @@ def get_parse():
     parser.add_argument("-p", "--pre", help="exp_name", type=str)
     parser.add_argument("-m", "--motion", help="motion_path", type=str)
     parser.add_argument(
+        "--dataset-root",
+        type=str,
+        help="override DATASETS_CONFIG[--pre].root_dirs",
+    )
+    parser.add_argument(
+        "--dataset-meta",
+        type=str,
+        help="override DATASETS_CONFIG[--pre].meta_path",
+    )
+    parser.add_argument(
         "-s",
         "--split",
         help="split_dataset, used for distribution inference.",
@@ -829,12 +853,39 @@ def main():
     )
 
     exp_name = args.pre
-    motion = args.motion
-
-    motion = motion[:-1] if motion[-1] == "/" else motion
+    if not exp_name:
+        raise ValueError("--pre must name a dataset configuration")
+    if not args.motion:
+        raise ValueError("--motion must point to a motion directory")
+    motion = args.motion.rstrip("/")
+    if not motion:
+        raise ValueError("--motion cannot be the filesystem root")
     cfg, model_name = parse_configs()
     # save_path = os.path.join('./exps/validation/public_benchmark', model_name)
-    assert exp_name in list(DATASETS_CONFIG.keys())
+    if exp_name not in DATASETS_CONFIG:
+        raise ValueError(
+            f"Unknown dataset config {exp_name!r}; choose one of {sorted(DATASETS_CONFIG)}"
+        )
+    if args.dataset_root is not None:
+        DATASETS_CONFIG[exp_name]["root_dirs"] = args.dataset_root
+    if args.dataset_meta is not None:
+        DATASETS_CONFIG[exp_name]["meta_path"] = args.dataset_meta
+
+    dataset_config = DATASETS_CONFIG[exp_name]
+    if not dataset_config.get("root_dirs"):
+        raise ValueError("A dataset root is required; pass --dataset-root")
+    if not os.path.exists(dataset_config["root_dirs"]):
+        raise FileNotFoundError(
+            f"Dataset root does not exist: {dataset_config['root_dirs']}. "
+            "Pass --dataset-root to override the legacy path."
+        )
+    if dataset_config.get("meta_path") and not os.path.isfile(dataset_config["meta_path"]):
+        raise FileNotFoundError(
+            f"Dataset metadata does not exist: {dataset_config['meta_path']}. "
+            "Pass --dataset-meta to override the legacy path."
+        )
+    if not os.path.isdir(motion):
+        raise FileNotFoundError(f"Motion directory does not exist: {motion}")
 
     output_path = args.output
 

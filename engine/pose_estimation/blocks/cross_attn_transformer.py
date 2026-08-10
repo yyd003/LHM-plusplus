@@ -142,19 +142,23 @@ class Attention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), qkv)
 
         if mask is not None:
-            q, k, v = [x * mask[:, None, :, None] for x in [q, k, v]]
+            mask_values = mask.to(device=x.device, dtype=q.dtype)
+            q, k, v = [t * mask_values[:, None, :, None] for t in [q, k, v]]
 
         # q, k, v: [13:51:03.400365] torch.Size([22, 1, 256])
         # q, k ,vk after reshape: torch.Size([16, 8, 1, 32])
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
 
         if mask is not None:
-            dots = dots - (1 - mask)[:, None, None, :] * 10e10
+            invalid_keys = ~mask.to(device=dots.device, dtype=torch.bool)
+            dots = dots.masked_fill(
+                invalid_keys[:, None, None, :], torch.finfo(dots.dtype).min
+            )
 
         attn = self.attend(dots)
 
         if mask is not None:  # Just for good measure; this is probably overkill
-            attn = attn * mask[:, None, None, :]
+            attn = attn * mask_values[:, None, None, :]
 
         attn = self.dropout(attn)
 
@@ -200,17 +204,21 @@ class CrossAttention(nn.Module):
         )
 
         if mask is not None:
-            q = q * mask[:, None, :, None]
+            mask_values = mask.to(device=x.device, dtype=q.dtype)
+            q = q * mask_values[:, None, :, None]
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         if mask is not None:
-            dots = dots - (1 - mask).float()[:, None, :, None] * 1e6
+            invalid_queries = ~mask.to(device=dots.device, dtype=torch.bool)
+            dots = dots.masked_fill(
+                invalid_queries[:, None, :, None], torch.finfo(dots.dtype).min
+            )
         attn = self.attend(dots)
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
 
         if mask is not None:  # Just for good measure; this is probably overkill
-            out = out * mask[:, None, :, None]
+            out = out * mask_values[:, None, :, None]
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
 
@@ -268,11 +276,11 @@ class TransformerCrossAttn(nn.Module):
             if mask is not None:
                 try:
                     x = x * mask[:, :, None]
-                except:
-                    print("see ")
-                    import pdb
-
-                    pdb.set_trace()
+                except (IndexError, RuntimeError, TypeError) as exc:
+                    raise ValueError(
+                        "Attention mask must be broadcastable to the token tensor: "
+                        f"x.shape={tuple(x.shape)}, mask.shape={tuple(mask.shape)}"
+                    ) from exc
             x = self_attn(x, mask=mask, *args) + x
             x = cross_attn(x, mask=mask, *args, context=context_list[i]) + x
             x = ff(x, *args) + x

@@ -173,9 +173,8 @@ def main() -> None:
     pose_estimator = None
     if cfg.get("use_smplx_shape_estimator", True):
         pose_estimator = PoseEstimator(
-            "./pretrained_models/human_model_files/", device="cpu"
+            "./pretrained_models/human_model_files/", device="cuda"
         )
-        pose_estimator.device = "cuda"
 
     # Load images
     print(f"[2/6] Loading images from {args.image_glob}...")

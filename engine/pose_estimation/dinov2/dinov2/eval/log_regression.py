@@ -10,7 +10,12 @@ import sys
 import time
 from typing import List, Optional
 
-from cuml.linear_model import LogisticRegression
+try:
+    from cuml.linear_model import LogisticRegression as CuMLLogisticRegression
+except ImportError:
+    CuMLLogisticRegression = None
+
+from sklearn.linear_model import LogisticRegression as SklearnLogisticRegression
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed
@@ -116,31 +121,43 @@ class LogRegModule(nn.Module):
     ):
         super().__init__()
         self.dtype = dtype
-        self.device = device
-        self.estimator = LogisticRegression(
-            penalty="l2",
-            C=C,
-            max_iter=max_iter,
-            output_type="numpy",
-            tol=1e-12,
-            linesearch_max_iter=50,
-        )
+        requested_device = torch.device(device)
+        if requested_device.type == "cuda" and CuMLLogisticRegression is not None:
+            self.device = requested_device
+            self.estimator = CuMLLogisticRegression(
+                penalty="l2",
+                C=C,
+                max_iter=max_iter,
+                output_type="numpy",
+                tol=1e-12,
+                linesearch_max_iter=50,
+            )
+        else:
+            if requested_device.type == "cuda":
+                logger.warning(
+                    "cuML is unavailable; falling back to scikit-learn "
+                    "LogisticRegression on CPU."
+                )
+            self.device = _CPU_DEVICE
+            self.estimator = SklearnLogisticRegression(
+                l1_ratio=0, C=C, max_iter=max_iter, tol=1e-12
+            )
 
     def forward(self, samples, targets):
         samples_device = samples.device
         samples = samples.to(dtype=self.dtype, device=self.device)
         if self.device == _CPU_DEVICE:
-            samples = samples.numpy()
+            samples = samples.detach().cpu().numpy()
         probas = self.estimator.predict_proba(samples)
         return {"preds": torch.from_numpy(probas).to(samples_device), "target": targets}
 
     def fit(self, train_features, train_labels):
         train_features = train_features.to(dtype=self.dtype, device=self.device)
-        train_labels = train_labels.to(dtype=self.dtype, device=self.device)
+        train_labels = train_labels.to(device=self.device)
         if self.device == _CPU_DEVICE:
             # both cuML and sklearn only work with numpy arrays on CPU
-            train_features = train_features.numpy()
-            train_labels = train_labels.numpy()
+            train_features = train_features.detach().cpu().numpy()
+            train_labels = train_labels.detach().cpu().numpy()
         self.estimator.fit(train_features, train_labels)
 
 

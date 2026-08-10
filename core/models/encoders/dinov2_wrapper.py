@@ -19,9 +19,9 @@ import kornia
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Dinov2Wrapper(nn.Module):

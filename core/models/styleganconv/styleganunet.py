@@ -332,8 +332,5 @@ if __name__ == "__main__":
 
         data = torch.rand(2, 3, 512, 512).cuda()
         print(model(data.clone()).shape)
-        import ipdb
-
-        ipdb.set_trace()
         for i in tqdm(range(100)):
             result = model(data.clone())

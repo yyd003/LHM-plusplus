@@ -1035,12 +1035,9 @@ class Mesh:
 
 if __name__ == "__main__":
     import os
-    import pdb
     import sys
-
-    import tqlt
 
     sys.path.append("./")
     obj_mesh = Mesh().load(path="./test.glb")
 
-    pdb.set_trace()
+    print(f"Loaded mesh: vertices={len(obj_mesh.v)}, faces={len(obj_mesh.f)}")

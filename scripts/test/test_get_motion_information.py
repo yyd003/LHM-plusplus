@@ -10,7 +10,7 @@ Usage:
     # or derive from motion video path (same logic as app.py prepare_input_and_output)
     python scripts/test/test_get_motion_information.py --motion_video ./motion_video/Dance_I/Dance_I.mp4
 
-Note: Remove pdb.set_trace() in get_motion_information (app_utils) and prepare_motion_seqs_eval (infer/utils)
+Note: The motion helpers must not contain interactive debugger breakpoints.
       for uninterrupted run if present.
 """
 

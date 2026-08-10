@@ -9,7 +9,6 @@
 
 
 import os
-import pdb
 from typing import Dict, List, Tuple, Union
 
 import torch
@@ -272,7 +271,6 @@ class DPTHead(nn.Module):
             out.append(x)
             dpt_idx += 1
 
-        pdb.set_trace()
         # Fuse features from multiple layers.
         out = self.scratch_forward(out)
         # Interpolate fused output to match target image resolution.

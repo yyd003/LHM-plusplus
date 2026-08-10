@@ -18,7 +18,6 @@ import pickle
 import time
 import traceback
 
-import ipdb
 import numpy as np
 import torch
 import trimesh

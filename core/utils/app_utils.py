@@ -425,7 +425,7 @@ def get_motion_information(
     bbox_list = []
     for mask_path in mask_paths:
         mask_name = os.path.basename(mask_path).split(".")[0]
-        bbox = bbox_dict.get(mask_name)
+        bbox = bbox_dict.get(mask_name) if bbox_dict is not None else None
 
         if bbox is not None:
             bbox_list.append(Bbox(bbox, mode="xywh").to_whwh())

@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn as nn
-from accelerate.logging import get_logger
 from diffusers.models.attention import FeedForward
 from diffusers.utils import is_torch_version
 from einops import rearrange

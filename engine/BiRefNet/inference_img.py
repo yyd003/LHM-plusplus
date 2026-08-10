@@ -3,7 +3,7 @@ import pdb
 import time
 
 import torch
-import tqlt.utils as tu
+from pathlib import Path
 from models.birefnet import BiRefNet
 from PIL import Image
 from torchvision import transforms
@@ -20,7 +20,7 @@ from utils import check_state_dict
 
 # # Option-2: loading weights with BiReNet codes:
 # birefnet = BiRefNet.from_pretrained('zhengpeng7/BiRefNet')
-imgs = tu.next_files("./in_the_wild", ".png")
+imgs = sorted(str(path) for path in Path("./in_the_wild").rglob("*.png"))
 
 
 birefnet = BiRefNet(bb_pretrained=False)

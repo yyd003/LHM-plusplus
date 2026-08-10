@@ -18,14 +18,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-from accelerate.logging import get_logger
+import logging
 from tqdm import tqdm
 
 from core.models.utils import linear
 
 from .dinov2_wrapper import Dinov2Wrapper
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 timings = {}
 BATCH_SIZE = 64

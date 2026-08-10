@@ -714,7 +714,7 @@ def prepare_motion_single(
             smplx_raw_data = json.load(f)
             smplx_param = _parse_smplx_param(smplx_raw_data)
 
-        if idx == 0:
+        if shape_param is None:
             shape_param = smplx_param["betas"]
 
         c2w, intrinsic = _load_pose(smplx_param)
@@ -756,6 +756,83 @@ def prepare_motion_single(
 
     smplx_params = _stack_smplx_params_list(smplx_params, shape_param)
     base = _to_motion_batch_dict(c2ws, intrs, bg_colors, smplx_params, rgbs, vis_motion)
+    return base
+
+
+def prepare_motion_seqs(
+    motion_seqs,
+    mask_paths=None,
+    bg_color=1.0,
+    aspect_standard=5.0 / 3,
+    enlarge_ratio=(1.0, 1.0),
+    render_image_res=420,
+    need_mask=False,
+    multiply=14,
+    vis_motion=False,
+    motion_size=3000,
+    specific_id_list=None,
+):
+    """Prepare motion data when foreground-mask assets are unavailable.
+
+    This is the mask-free counterpart of :func:`prepare_motion_seqs_eval`.
+    It preserves the full source frame, scales its intrinsics to an aligned
+    render size, and emits unit masks/zero crop offsets so downstream callers
+    can use the same dictionary contract.
+    """
+    del mask_paths, enlarge_ratio, need_mask, specific_id_list
+    motion_seqs = motion_seqs[:motion_size]
+    if not motion_seqs:
+        raise RuntimeError("prepare_motion_seqs: the motion sequence is empty")
+
+    c2ws, intrs, bg_colors, masks, offsets, smplx_params = [], [], [], [], [], []
+    shape_param = None
+    ori_size = None
+
+    for smplx_raw_data in motion_seqs:
+        smplx_param = _parse_smplx_param(smplx_raw_data)
+        c2w, intrinsic = _load_pose(smplx_param)
+        if shape_param is None:
+            shape_param = smplx_param["betas"]
+        if "expr" not in smplx_param:
+            smplx_param["expr"] = torch.zeros(100, dtype=torch.float32)
+
+        size_wh = smplx_raw_data.get("img_size_wh")
+        if size_wh is None or len(size_wh) != 2:
+            raise ValueError(
+                "Mask-free motion preparation requires img_size_wh=[width, height] "
+                "in every SMPL-X JSON"
+            )
+        src_w, src_h = map(int, size_wh)
+        if src_w <= 0 or src_h <= 0:
+            raise ValueError(f"Invalid img_size_wh: {size_wh}")
+        if ori_size is None:
+            ori_size = (src_h, src_w)
+
+        target_h, target_w = _snap_hw_to_multiply(
+            render_image_res * aspect_standard,
+            render_image_res,
+            multiply,
+        )
+        intrinsic = scale_intrs(intrinsic, target_w / src_w, target_h / src_h)
+
+        c2ws.append(c2w)
+        intrs.append(intrinsic)
+        bg_colors.append(bg_color)
+        masks.append(np.ones((target_h, target_w), dtype=np.float32))
+        offsets.append([target_w / src_w, target_h / src_h, 0, 0])
+        smplx_params.append(smplx_param)
+
+    c2ws = torch.stack(c2ws)
+    intrs = torch.stack(intrs)
+    bg_colors = torch.as_tensor(bg_colors, dtype=torch.float32).unsqueeze(-1).repeat(1, 3)
+    params = _stack_smplx_params_list(smplx_params, shape_param)
+    base = _to_motion_batch_dict(c2ws, intrs, bg_colors, params, [], vis_motion)
+    base.update(
+        motion_seqs=motion_seqs,
+        offset_list=offsets,
+        masks=masks,
+        ori_size=ori_size,
+    )
     return base
 
 

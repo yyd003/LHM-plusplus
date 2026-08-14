@@ -1,122 +1,119 @@
-# LHM++ Installation
+# LHM++ installation: `pt210` / CUDA 12.8
 
-## Requirements
+## Supported runtime
 
-- Linux (tested on Ubuntu)
-- Python 3.10
-- PyTorch 2.3.0
-- torchvision 0.18.0
-- CUDA 12.1 (recommended)
+- Linux x86-64
+- Conda Python 3.11
+- PyTorch `2.10.0+cu128`, torchvision `0.25.0+cu128`, torchaudio `2.10.0+cu128`
+- xFormers `0.0.35`
+- NVIDIA driver capable of running CUDA 12.8 binaries
+- CUDA Toolkit 12.8, C/C++ compiler, CMake and Ninja when compiling CUDA extensions
 
-## 1. Clone the repository
+The PyTorch wheel contains the CUDA runtime. A system CUDA Toolkit is required only for
+source-built extensions. GPU architecture is detected at build time; wheels built only
+for Blackwell `sm_120` must not be copied to a different GPU architecture.
+
+## 1. Clone and create the environment
 
 ```bash
-git clone https://github.com/aigc3d/LHM-plusplus
+git clone https://github.com/aigc3d/LHM-plusplus.git
 cd LHM-plusplus
+bash envs/torch210-cu128/create_env.sh
+conda activate pt210
 ```
 
-## 2. Install PyTorch and xformers
+## 2. Install public binary dependencies
 
 ```bash
-# CUDA 12.1 (recommended)
-pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
-pip install -U xformers==0.0.26.post1 --index-url https://download.pytorch.org/whl/cu121
+python -m pip install --no-deps \
+  'pytorch3d==0.7.9+pt2.10.0cu128' \
+  --extra-index-url https://miropsota.github.io/torch_packages_builder
+python -m pip install --no-deps torch-scatter==2.1.2 \
+  -f https://data.pyg.org/whl/torch-2.10.0+cu128.html
+python -m pip install --no-deps spconv-cu128==2.4.1 \
+  --extra-index-url https://ratharog.github.io/cumm-spconv/
 ```
 
-## 3. Install base dependencies
+PyTorch3D can instead be cloned from `https://github.com/facebookresearch/pytorch3d.git`
+at tag `v0.7.9` and built with `FORCE_CUDA=1`, `--no-deps`, and
+`--no-build-isolation`.
+
+## 3. Build dependencies without public matching wheels
 
 ```bash
-pip install -r requirements.txt
-pip install rembg[cpu]  # used during extracting sparse view inputs
+bash envs/torch210-cu128/build_cuda_extensions.sh
 ```
 
-## 4. Install pointops
+The script clones and pins:
+
+| package | source revision |
+|---|---|
+| diff-gaussian-rasterization | `graphdeco-inria/diff-gaussian-rasterization`, commit `9c5c2028f6fbee2be239bc4c9421ff894fe4fbe0` |
+| simple-knn | `camenduru/simple-knn`, commit `86710c2d4b46680c02301765dd79e465819c8f19` |
+| flash-attn | `Dao-AILab/flash-attention`, tag `v2.8.3.post1` |
+| pointops | this repository's `lib/pointops` |
+
+By default the script uses a temporary source/build directory and removes it when
+finished. The compiled extensions are installed directly into the active Conda environment.
+Set `BUILD_ROOT` only if a persistent source cache is desired; `PYTHON_BIN`,
+`TORCH_CUDA_ARCH_LIST`, and `MAX_JOBS` are also configurable.
+
+## 4. Sapiens source dependency
+
+LHM++ imports the Meta Sapiens forks of mmengine/mmcv/mmseg/mmpose. The
+Python 3.11 / PyTorch 2.10 compatibility changes are published on the maintained
+fork. Clone and pin it as a sibling checkout:
 
 ```bash
-cd ./lib/pointops/ && python setup.py install && cd ../../
+git clone https://github.com/PoliteYoung/sapiens.git ../../third_party/sapiens
+git -C ../../third_party/sapiens checkout 4ad09e7017d9ed9ff78e58c557200677d04eb4fd
+for pkg in engine cv seg pose; do
+  python -m pip install --no-deps --no-build-isolation -e "../../third_party/sapiens/$pkg"
+done
 ```
 
-## 5. Install spconv and torch_scatter
+The fixed commit is on the fork's default `main` branch. Sapiens source contains
+no model weights; obtain official checkpoints from
+`https://huggingface.co/facebook/sapiens` as required by the selected config.
+
+## 5. Install LHM++ Python requirements
 
 ```bash
-pip install spconv-cu121
-
-# torch_scatter: see [wheel](https://data.pyg.org/whl/) for your CUDA version
-# Example (PyTorch 2.3 + CUDA 12.1 + Python 3.10):
-pip install torch_scatter-2.1.2+pt23cu121-cp310-cp310-linux_x86_64.whl
+python -m pip install --no-deps -r requirements.txt
 ```
 
-## 6. Install PyTorch3D
+`requirements.txt` contains only portable public package references and repository-relative
+editable paths. Install public packages with `--no-deps` when dependency metadata would replace the
+validated OpenCV/NumPy stack. ABI-sensitive packages are built from source on the target machine.
+`megfile==5.0.15` is installed from its public pure-Python wheel together with its supported
+public dependency `paramiko==3.5.1`; no local repack is retained.
+
+## 6. Download weights and assets
 
 ```bash
-pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt230/download.html
-```
-
-## 7. Install diff-gaussian-rasterization
-
-```bash
-pip install git+https://github.com/ashawkey/diff-gaussian-rasterization/
-# or
-# git clone --recursive https://github.com/ashawkey/diff-gaussian-rasterization
-# pip install ./diff-gaussian-rasterization
-```
-
-## 8. Install simple-knn
-
-```bash
-pip install git+https://github.com/camenduru/simple-knn/
-```
-
-## 9. Install gsplat
-
-Download the pre-compiled wheel from [gsplat whl](https://docs.gsplat.studio/whl/gsplat/).
-
-```bash
-# Example (PyTorch 2.3 + CUDA 12.1 + Python 3.10):
-pip install gsplat-1.4.0+pt23cu121-cp310-cp310-linux_x86_64.whl
-```
-
-## 10. Download model weights
-
-```bash
-# Download prior models + pretrained weights (default)
-python scripts/download_pretrained_models.py
-
-# Prior models only (human_model_files, voxel_grid, BiRefNet, etc.)
+python scripts/download_all.py
+# or independently:
 python scripts/download_pretrained_models.py --prior
-
-# LHM++ model weights only (LHMPP-700M, LHMPP-700MC, LHMPPS-700M)
 python scripts/download_pretrained_models.py --models
+python scripts/download_motion_video.py
 ```
 
-## Optional dependencies
+| asset | source | destination |
+|---|---|---|
+| LHMPP-700M / LHMPP-700MC / LHMPPS-700M | Hugging Face or ModelScope; script falls back between mirrors | `pretrained_models/` |
+| LHMPP-Prior (human models, voxel grid, ArcFace, BiRefNet, etc.) | `Damo_XR_Lab/LHMPP-Prior` / corresponding HF mirror | `pretrained_models/` |
+| motion examples | `Damo_XR_Lab/LHMPP-Assets` | `motion_video/` |
 
-### SAM2 (for video segmentation)
+Some SMPL/SMPL-X/MANO assets have separate licenses. Do not redistribute them outside
+the terms accepted at the official model sites. Confirm that the downloaded prior contains
+the required `human_model_files`; otherwise obtain them from the official SMPL-X/MANO sites.
 
-We use a modified version of SAM2. Install only if needed for video processing:
+## 7. Verify
 
 ```bash
-pip install git+https://github.com/hitsz-zuoqi/sam2/
-# or
-# git clone --recursive https://github.com/hitsz-zuoqi/sam2
-# pip install ./sam2
+python envs/torch210-cu128/verify_attention.py
+python envs/torch210-cu128/verify_extensions.py
+python -m pip check
 ```
 
-## Windows installation
-
-1. Install **Python 3.10** from [python.org](https://www.python.org/downloads/release/python-3100/).
-2. Install CUDA 12.1 toolkit.
-3. Create a virtual environment and follow steps 2–10 above:
-
-```bash
-python -m venv lhmpp_env
-lhmpp_env\Scripts\activate
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# ... then run the remaining pip install commands from steps 3–9
-```
-
-Note: Adjust wheel filenames (torch_scatter, gsplat) for your Python version and CUDA. See [PyG wheels](https://data.pyg.org/whl/) and [gsplat whl](https://docs.gsplat.studio/whl/gsplat/).
-
----
-
-The installation has been tested with Python 3.10 and CUDA 12.1. For issues, refer to [README.md](README.md) or open an issue on GitHub.
+See `envs/torch210-cu128/README.md` for the full dependency and reproducibility audit.

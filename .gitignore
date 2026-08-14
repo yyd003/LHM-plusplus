@@ -90,5 +90,5 @@ release_tools/
 # Generated package metadata
 lib/pointops/*.egg-info/
 
-# Papers and local reading notes are kept in /home/dreams/yaodong/papers
+# Papers and local reading notes are kept in /home/dreams/yaodong/research/papers
 papers/

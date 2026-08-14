@@ -4,7 +4,6 @@
 --extra-index-url https://miropsota.github.io/torch_packages_builder
 --extra-index-url https://ratharog.github.io/cumm-spconv/
 --find-links https://data.pyg.org/whl/torch-2.10.0+cu128.html
---find-links file:///home/dreams/yaodong/wheelhouse/pt210-cu128
 
 torch==2.10.0+cu128
 torchvision==0.25.0+cu128
@@ -22,15 +21,15 @@ simple-knn==0.0.0
 gsplat==1.5.3
 spconv-cu128==2.4.1
 pointops==0.0.0
-chumpy==0.71+pt210
+chumpy==0.71
 -e ./engine/pose_estimation/dinov2
 
 # Local Sapiens forks provide the mmcv/mmengine/mmseg/mmpose import namespaces.
 # Do not replace these with the unrelated PyPI packages of the same import names.
--e ../external/sapiens/engine
--e ../external/sapiens/cv
--e ../external/sapiens/seg
--e ../external/sapiens/pose
+-e ../../third_party/sapiens/engine
+-e ../../third_party/sapiens/cv
+-e ../../third_party/sapiens/seg
+-e ../../third_party/sapiens/pose
 
 # Application and model runtime.
 accelerate==1.14.0
@@ -57,7 +56,10 @@ questionary==2.1.1
 kornia==0.8.3
 lpips==0.1.4
 matplotlib==3.11.1
-megfile @ file:///home/dreams/yaodong/wheelhouse/pt210-cu128/megfile-5.0.15%2Bpt210-py3-none-any.whl
+# megfile 5.0.15 has a public pure-Python wheel and supports Paramiko <4.
+# Pin the supported public dependency instead of carrying a local patched package.
+megfile==5.0.15
+paramiko==3.5.1
 numpy==2.4.6
 opencv-python==5.0.0.93
 onnxruntime-gpu==1.26.0
@@ -65,7 +67,7 @@ packaging==26.2
 pillow==12.3.0
 plyfile==1.1.5
 pygltflib==1.16.5
-pyrender @ file:///home/dreams/yaodong/wheelhouse/pt210-cu128/pyrender-0.1.45%2Bpt210-py3-none-any.whl
+pyrender==0.1.45
 PyYAML==6.0.3
 rembg[gpu]==2.0.77
 requests==2.34.2

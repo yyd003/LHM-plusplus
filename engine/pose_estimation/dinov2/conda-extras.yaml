@@ -1,24 +1,24 @@
-name: dinov2-extras
+# Reference manifest for optional DINOv2 tooling in the shared pt210 runtime.
+# Create pt210 with ../../envs/torch210-cu128/create_env.sh first; install the
+# maintained project requirements afterwards with --no-deps.
+name: pt210
 channels:
-  - defaults
   - pytorch
   - nvidia
-  - xformers
   - conda-forge
+  - defaults
 dependencies:
-  - python=3.9
-  - pytorch::pytorch=2.0.0
-  - pytorch::pytorch-cuda=11.7.0
-  - pytorch::torchvision=0.15.0
+  - python=3.11
+  - pip
+  - pytorch=2.10.*
+  - torchvision=0.25.*
+  - torchaudio=2.10.*
+  - pytorch-cuda=12.8
   - omegaconf
-  - torchmetrics=0.10.3
+  - torchmetrics
   - fvcore
   - iopath
-  - xformers::xformers=0.0.18
-  - pip
   - pip:
-    - git+https://github.com/facebookincubator/submitit
-    - --extra-index-url https://pypi.nvidia.com
-    - cuml-cu11
-    - mmcv-full==1.5.0
-    - mmsegmentation==0.27.0
+    - submitit
+# Optional OpenMMLab/RAPIDS dependencies are pinned by the workspace installer;
+# do not install old mmcv-full or cu11 packages into pt210.

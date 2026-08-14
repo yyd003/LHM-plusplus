@@ -64,51 +64,21 @@ For English readers, see [README in English](./README.md).
 ## 🚀 快速开始
 
 ### 环境配置
-克隆仓库。
+
+维护中的统一环境为 Conda `pt210`：Python 3.11、PyTorch 2.10.0 + CUDA 12.8、
+torchvision 0.25.0、torchaudio 2.10.0、xFormers 0.0.35。创建环境：
+
 ```bash
-git clone https://github.com/aigc3d/LHM-plusplus
+git clone https://github.com/aigc3d/LHM-plusplus.git
 cd LHM-plusplus
+bash envs/torch210-cu128/create_env.sh
+conda activate pt210
+# 然后按 INSTALL_CN.md 安装公开 wheel、源码依赖并验证。
 ```
 
-```bash
-# 安装 torch 2.3.0 cuda 12.1
-pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
-pip install -U xformers==0.0.26.post1 --index-url https://download.pytorch.org/whl/cu121
-
-# 安装依赖
-pip install -r requirements.txt
-pip install rembg[cpu]  # 仅在提取稀疏视角输入时使用
-
-# 安装 pointops
-cd ./lib/pointops/ && python setup.py install && cd ../../
-
-pip install spconv-cu121
-# pip install torch_scatter，请根据 CUDA 版本选择 [wheel](https://data.pyg.org/whl/)
-# 例如 (PyTorch 2.3 + CUDA 12.1 + Python 3.10):
-pip install torch_scatter-2.1.2+pt23cu121-cp310-cp310-linux_x86_64.whl
-
-# 安装 pytorch3d
-pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt230/download.html
-
-# 安装 diff-gaussian-rasterization
-pip install git+https://github.com/ashawkey/diff-gaussian-rasterization/
-# 或
-# git clone --recursive https://github.com/ashawkey/diff-gaussian-rasterization
-# pip install ./diff-gaussian-rasterization
-
-# 安装 simple-knn
-pip install git+https://github.com/camenduru/simple-knn/
-
-
-# 安装 gsplat
-# 从预编译 [wheel](https://docs.gsplat.studio/whl/gsplat/) 安装 gsplat
-# 例如 (PyTorch 2.3 + CUDA 12.1 + Python 3.10):
-# gsplat-1.4.0+pt23cu121-cp310-cp310-linux_x86_64.whl
-pip install gsplat-1.4.0+pt23cu121-cp310-cp310-linux_x86_64.whl
-```
-
-安装已在 Python 3.10、CUDA 12.1 环境下测试。
-如需逐步安装依赖，请参考 [INSTALL_CN.md](INSTALL_CN.md)。
+不能把只为 `sm_120` 编译的 wheel 复制到其他 GPU 架构。仅运行时需要兼容的 NVIDIA
+驱动；编译扩展时还需要 CUDA 12.8 Toolkit。详见 [INSTALL_CN.md](INSTALL_CN.md) 和
+[envs/torch210-cu128/README.md](envs/torch210-cu128/README.md)。
 
 ### 模型权重 
 

@@ -63,51 +63,23 @@ If you prefer Chinese documentation, please see the [Chinese README](./README_CN
 ## 🚀 Getting Started
 
 ### Environment Setup
-Clone the repository.
+
+The maintained runtime is the shared Conda environment `pt210`: Python 3.11,
+PyTorch 2.10.0 with CUDA 12.8, torchvision 0.25.0, torchaudio 2.10.0 and
+xFormers 0.0.35. Create it and build the CUDA extensions with:
+
 ```bash
-git clone https://github.com/aigc3d/LHM-plusplus
+git clone https://github.com/aigc3d/LHM-plusplus.git
 cd LHM-plusplus
+bash envs/torch210-cu128/create_env.sh
+conda activate pt210
+# Follow INSTALL.md for public wheels, source-only dependencies and validation.
 ```
 
-```bash
-# install torch 2.3.0 cuda 12.1
-pip install torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
-pip install -U xformers==0.0.26.post1 --index-url https://download.pytorch.org/whl/cu121
-
-# install dependencies
-pip install -r requirements.txt
-pip install rembg[cpu]  # only use during extracting sparse view inputs.
-
-# install pointops
-cd ./lib/pointops/ && python setup.py install && cd ../../
-
-pip install spconv-cu121
-# pip install torch_scatter, see [wheel](https://data.pyg.org/whl/) for your CUDA version
-# For example (PyTorch 2.3 + CUDA 12.1 + Python 3.10):
-pip install torch_scatter-2.1.2+pt23cu121-cp310-cp310-linux_x86_64.whl
-
-# install pytorch3d
-pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt230/download.html
-
-# install diff-gaussian-rasterization
-pip install git+https://github.com/ashawkey/diff-gaussian-rasterization/
-# or
-# git clone --recursive https://github.com/ashawkey/diff-gaussian-rasterization
-# pip install ./diff-gaussian-rasterization
-
-# install simple-knn
-pip install git+https://github.com/camenduru/simple-knn/
-
-
-# install gsplat
-# pip install gsplat from pre-compiled [wheel](https://docs.gsplat.studio/whl/gsplat/)
-# For example (PyTorch 2.3 + CUDA 12.1 + Python 3.10):
-# gsplat-1.4.0+pt23cu121-cp310-cp310-linux_x86_64.whl
-pip install gsplat-1.4.0+pt23cu121-cp310-cp310-linux_x86_64.whl
-```
-
-The installation has been tested with python3.10, CUDA 12.1.
-Or you can install dependencies step by step, following [INSTALL.md](INSTALL.md).
+Do not copy an `sm_120`-only wheel to a different GPU architecture. Runtime-only
+machines need a compatible NVIDIA driver; compiling extensions additionally needs
+the CUDA 12.8 Toolkit. See [INSTALL.md](INSTALL.md) and
+[envs/torch210-cu128/README.md](envs/torch210-cu128/README.md).
 
 ### Model Weights 
 

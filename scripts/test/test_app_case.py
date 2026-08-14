@@ -112,6 +112,15 @@ def main() -> None:
         help="Crop output to subject bounds with 10%% padding",
     )
     parser.add_argument(
+        "--camera_zoom",
+        type=float,
+        default=1.0,
+        help=(
+            "Render-camera focal multiplier. Values below 1 pull the camera back "
+            "without changing the SMPL-X motion (for example, 0.75 gives a 1.33x wider view)."
+        ),
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="debug/app_test",
@@ -214,6 +223,18 @@ def main() -> None:
     motion_name, motion_seqs = get_motion_information(
         motion_path, cfg, motion_size=args.motion_size
     )
+    if args.camera_zoom <= 0:
+        raise ValueError("--camera_zoom must be positive")
+    if abs(args.camera_zoom - 1.0) > 1e-6:
+        # Change only the output projection. Keep cx/cy, SMPL-X pose, translation,
+        # and the motion-camera parameters untouched so this is a pure zoom-out.
+        motion_seqs["render_intrs"] = motion_seqs["render_intrs"].clone()
+        motion_seqs["render_intrs"][..., 0, 0] *= args.camera_zoom
+        motion_seqs["render_intrs"][..., 1, 1] *= args.camera_zoom
+        print(
+            f"  Render camera zoom: {args.camera_zoom:.3f}x focal "
+            f"({1.0 / args.camera_zoom:.2f}x wider view)"
+        )
     video_size = len(motion_seqs["motion_seqs"])
     print(f"  Motion: {motion_name}, frames: {video_size}")
 

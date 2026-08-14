@@ -34,7 +34,7 @@ python -m pip install \
 ```
 
 On this machine the shared environment already exists at
-`/home/dreams/.conda/envs/pt210`. Do not recreate it per project.
+the active Conda environment named `pt210`. Do not recreate it per project.
 
 ## Legacy CUDA extensions
 
@@ -65,44 +65,31 @@ python -m pip install --no-cache-dir torch_scatter \
 ```
 
 The verified extension versions are now recorded in the repository root
-`requirements.txt`; install existing wheels with `--no-deps` and build local
-extensions with `--no-deps --no-build-isolation`.
+`requirements.txt`; install matching public wheels with `--no-deps` and compile
+source extensions with `--no-deps --no-build-isolation`.
 
 ### Locally built CUDA extensions
 
 The MiroPsota index does not currently publish PyTorch 2.10 / CUDA 12.8 wheels
-for `flash-attn`, `diff-gaussian-rasterization`, or `simple-knn`. Matching
-wheels were therefore built locally from the same source revisions used by
-the MiroPsota packages where available:
+for `flash-attn`, `diff-gaussian-rasterization`, or `simple-knn`. They are therefore compiled from pinned source revisions on each destination machine:
 
 - `diff-gaussian-rasterization`: commit `9c5c2028f6fbee2be239bc4c9421ff894fe4fbe0`
 - `simple-knn`: commit `86710c2d4b46680c02301765dd79e465819c8f19`
 - `flash-attn`: tag `v2.8.3.post1`
 
-The FlashAttention wheel is deliberately compiled only for `sm_120`. It is an
-RTX 50-series/Blackwell-specific wheel and must not be installed on older GPU
-architectures.
+The build script detects the active GPU architecture. Do not copy the resulting
+binaries between machines with different Python, PyTorch, CUDA, or GPU architectures.
 
-Build and install the three wheels, then install gsplat:
+Build and install the extensions, then install gsplat:
 
 ```bash
 bash envs/torch210-cu128/build_cuda_extensions.sh
 ```
 
-The default wheelhouse is outside the Git repository at:
-
-```text
-../wheelhouse/pt210-cu128/
-```
-
-The generated wheels are not committed because they are large, Python/ABI
-specific binary artifacts. On this machine their SHA-256 hashes are:
-
-```text
-fed9ec54bd81cc0e21fca102643ac831583c59d3cac6ee881d0301f6a44c60cd  diff_gaussian_rasterization-0.0.0-cp311-cp311-linux_x86_64.whl
-16fcf7d7cdecf78478c8f8a8eedf4832d8bb26b24f3db7a1f98a78ab627716f4  simple_knn-0.0.0-cp311-cp311-linux_x86_64.whl
-408087fd5cfa0643d7902e446fc95940625b587dced25de67b4dbc348c9c061e  flash_attn-2.8.3.post1-cp311-cp311-linux_x86_64.whl
-```
+The compiled packages are installed directly into the active Conda environment.
+The script uses and removes a temporary build directory by default, so no
+machine-specific binary cache is kept in the workspace. Set `BUILD_ROOT` only
+when an explicit persistent source cache is desired.
 
 `spconv-cu128` is maintained through the
 [rathaROG/cumm-spconv package index](https://ratharog.github.io/cumm-spconv/)
@@ -115,26 +102,14 @@ python -m pip install --no-cache-dir \
 ```
 
 Repository-local extensions such as `lib/pointops` must be rebuilt inside the
-PyTorch 2.10 environment. PointOps imports PyTorch from `setup.py`, so an isolated
-PEP 517 build can select a different PyTorch/CUDA stack. Build it without build
-isolation, save the resulting wheel in the local wheelhouse, and then let
-`requirements.txt` install that wheel:
+PyTorch 2.10 environment. PointOps imports PyTorch from `setup.py`, so install it
+without build isolation:
 
 ```bash
-/home/dreams/.conda/envs/pt210/bin/python -m pip wheel \
-  --no-build-isolation --no-deps \
-  /home/dreams/yaodong/LHM-plusplus/lib/pointops \
-  --wheel-dir /home/dreams/yaodong/wheelhouse/pt210-cu128
-
-/home/dreams/.conda/envs/pt210/bin/python -m pip install \
-  --no-index --find-links /home/dreams/yaodong/wheelhouse/pt210-cu128 \
-  --force-reinstall --no-deps pointops==0.0.0
+python -m pip install --force-reinstall --no-deps --no-build-isolation ./lib/pointops
 ```
 
-The pip option is `--no-build-isolation` (there is no
-`--no-build-isolation` option). A requirements file cannot attach this
-build option to only one dependency, which is why the checked-in requirements
-resolve the prebuilt wheel through `--find-links` instead of rebuilding PointOps.
+The checked-in build script performs this source installation automatically.
 
 
 ## ONNX Runtime CUDA loader
@@ -144,8 +119,7 @@ entry points call `onnxruntime.preload_dlls()`, and the provider RUNPATH can be
 repaired after any ORT reinstall without adding another CUDA runtime:
 
 ```bash
-/home/dreams/.conda/envs/pt210/bin/python \
-  envs/torch210-cu128/repair_ort_cuda_runpath.py \
+python envs/torch210-cu128/repair_ort_cuda_runpath.py \
   --verify-model pretrained_models/u2net/u2net.onnx
 ```
 
@@ -174,3 +148,27 @@ Expected on an RTX 5090:
 2. Legacy extension priority: `https://miropsota.github.io/torch_packages_builder`
 3. PyG extensions: `https://data.pyg.org/whl/torch-2.10.0+cu128.html`
 4. spconv fallback: `https://ratharog.github.io/cumm-spconv/`
+
+## Portable rebuild audit (2026-08-13)
+
+Use `create_env.sh` rather than a machine-specific Conda prefix. Public package
+indexes currently provide the pinned PyTorch/xFormers base, torch-scatter,
+PyTorch3D community wheels, spconv, MediaPipe 0.10.35, pyrender 0.1.45,
+Albumentations 2.0.8, cuDSS 0.8.0.10 and ONNX Runtime GPU 1.26.0.
+
+Public Python packages are installed with `--no-deps` when their dependency metadata
+would otherwise replace the validated Torch/OpenCV/NumPy stack. ABI-sensitive and
+CUDA packages are compiled from source on the destination machine.
+
+| component | public source / rebuild status |
+|---|---|
+| CUDA Gaussian extensions and PointOps | fully reproducible with `build_cuda_extensions.sh` |
+| PyTorch3D 0.7.9 | public source tag `v0.7.9`; matching community wheel also documented |
+| Sapiens OpenMMLab forks | clone `https://github.com/PoliteYoung/sapiens.git` and pin `4ad09e7017d9ed9ff78e58c557200677d04eb4fd`; compatibility changes are on default `main` |
+| Theseus | clone `https://github.com/PoliteYoung/theseus.git` and pin `aa219c4ac582b9a662f7d8991c3181a7d568ab56`; build `0.2.3+pt210` with cuDSS from default `main` |
+| MediaPipe 0.10.35 | install the public wheel with `--no-deps` so it does not replace the selected OpenCV build |
+| pyrender / Albumentations | install public releases with `--no-deps` |
+| chumpy / xtcocotools | compile the maintained source snapshots for the destination Python/NumPy ABI |
+
+Sapiens and Theseus are rebuilt from their public pinned forks. CUDA extensions and
+ABI-sensitive compatibility sources are rebuilt locally rather than copied as binaries.
